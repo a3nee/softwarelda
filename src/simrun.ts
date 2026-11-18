@@ -4,6 +4,7 @@ import {
   comDependencias, detetarSalas, ECON, fatorMercado, iniciarProjeto, LISTA_TIPOS, MIN_POR_DIA,
   novoJogo, segmento, semDependentes, TIPOS, trabalhoDoProjeto, validarFuncionalidades, valorDoProjeto,
   vendasIniciais, AREAS, totalDaArea, areaDeTrabalho, estimarProjeto,
+  cancelarProjeto, definirEquipa, despedir, eficienciaEquipa, membrosDe, semProjeto,
   type Estado, type TipoSoftware, type Trabalhador,
 } from './sim.ts';
 
@@ -122,7 +123,7 @@ verificar(cenarioSala(false) === 'semAcesso', 'sem porta fica sem acesso');
   verificar(!iniciarProjeto(s, '', 'editor').ok, 'editor bloqueado sem produtos');
   verificar(!iniciarProjeto(s, '', 'utilitario', ['agendamento']).ok, 'projeto com dependência em falta é recusado');
   verificar(iniciarProjeto(s, '', 'utilitario', ['grafica']).ok, 'utilitário com interface gráfica começa');
-  verificar(s.projeto!.trabalhoTotal === 26000 && s.projeto!.nome === 'Utilitário 1', 'projeto com trabalho e nome certos');
+  verificar(s.projetos[0].trabalhoTotal === 26000 && s.projetos[0].nome === 'Utilitário 1', 'projeto com trabalho e nome certos');
 }
 
 {
@@ -142,7 +143,7 @@ verificar(cenarioSala(false) === 'semAcesso', 'sem porta fica sem acesso');
   s.produtos.push(produto('editor', TIPOS.editor.vendas));
   verificar(iniciarProjeto(s, 'B', 'editor', ['corretor']).ok, 'editor desbloqueado com produtos lançados');
   // Quase acabado e feito por gente com competência 1 em todas as áreas → qualidade 100%
-  const pr = s.projeto!;
+  const pr = s.projetos[0];
   for (const a of AREAS) {
     pr.feito[a] = totalDaArea(pr, a) - 0.001;
     pr.somaQualidade[a] = pr.feito[a];
@@ -151,6 +152,9 @@ verificar(cenarioSala(false) === 'semAcesso', 'sem porta fica sem acesso');
   colocarSecretaria(s, 3, 3);
   contratar(s, 0);
   avancar(s, MIN_POR_DIA + 3 * 60);
+  verificar(s.produtos.length === 2, 'sem ninguém na equipa o projeto não avança');
+  definirEquipa(s, s.funcionarios[0].id, pr.id);
+  avancar(s, MIN_POR_DIA);
   const b = s.produtos[2];
   verificar(b !== undefined && b.qualidade === 1 && b.tipo === 'editor', 'o editor é lançado com qualidade 100%');
   verificar(b !== undefined && Math.abs(b.vendasMes - TIPOS.editor.vendas * 1.3 / (1 + ECON.saturacao)) < 1,
@@ -198,6 +202,47 @@ verificar(cenarioSala(false) === 'semAcesso', 'sem porta fica sem acesso');
   }
   verificar(Math.abs(dias / 30 - previsto.meses) < 0.25, `a previsão de duração acerta (${previsto.meses.toFixed(2)} vs ${(dias / 30).toFixed(2)} meses)`);
   verificar(Math.abs(r.produtos[0].qualidade - previsto.qualidade) < 0.02, 'a previsão de qualidade acerta');
+}
+
+{
+  // Equipas por projeto
+  verificar(eficienciaEquipa(1) === 1 && eficienciaEquipa(2) < 1, 'equipas de 2+ perdem eficiência por pessoa');
+  verificar(4 * eficienciaEquipa(4) > 3 * eficienciaEquipa(3), 'mas mais gente continua a fazer mais no total');
+  const um: Trabalhador = { competencias: { programacao: 0.7, design: 0.7, testes: 0.7 }, felicidade: 70 };
+  const sozinho = estimarProjeto([um], 'utilitario', []).meses;
+  const seis = estimarProjeto([um, um, um, um, um, um], 'utilitario', []).meses;
+  verificar(seis > sozinho / 6 * 1.2 && Math.abs(seis - sozinho / (6 * eficienciaEquipa(6))) < 0.05,
+    'seis pessoas não fazem o projeto seis vezes mais depressa (perdem o custo de coordenação)');
+
+  const s = novoJogo(9);
+  s.dinheiro = 1e6;
+  for (let i = 0; i < 3; i++) colocarSecretaria(s, 3 + i, 3);
+  contratar(s, 0);
+  contratar(s, 0);
+  contratar(s, 0);
+  const [a, b, c] = s.funcionarios.map((f) => f.id);
+  verificar(iniciarProjeto(s, 'A', 'utilitario', [], [a, b]).ok, 'projeto A com 2 pessoas');
+  verificar(semProjeto(s).length === 1, 'a terceira fica livre');
+  verificar(iniciarProjeto(s, 'B', 'utilitario').ok, 'projeto B com quem está livre');
+  const [pa, pb] = s.projetos;
+  verificar(membrosDe(s, pa.id).length === 2 && membrosDe(s, pb.id).length === 1, 'cada projeto tem a sua equipa');
+  verificar(iniciarProjeto(s, 'C', 'utilitario', [], [999]).ok === false, 'equipa com funcionário desconhecido é recusada');
+
+  avancar(s, MIN_POR_DIA + 4 * 60);
+  verificar(pa.trabalhoFeito > 0 && pb.trabalhoFeito > 0, 'os dois projetos avançam ao mesmo tempo');
+  const feitoB = pb.trabalhoFeito;
+  definirEquipa(s, c, pa.id);
+  avancar(s, 60);
+  verificar(pb.trabalhoFeito === feitoB, 'sem equipa o projeto B para');
+
+  verificar(cancelarProjeto(s, pb.id).ok && s.projetos.length === 1, 'cancelar tira o projeto');
+  despedir(s, a);
+  verificar(membrosDe(s, pa.id).length === 2, 'despedir tira a pessoa da equipa');
+
+  // Lançar liberta a equipa
+  for (const ar of AREAS) pa.feito[ar] = totalDaArea(pa, ar);
+  avancar(s, 1);
+  verificar(s.projetos.length === 0 && semProjeto(s).length === 2, 'ao lançar, a equipa fica livre');
 }
 
 console.log(`Testes: ${testes} OK`);

@@ -33,7 +33,7 @@ do Node (≥ 22.18) para correr TypeScript.
 - **Porta** (300 €): clica numa parede existente.
 - **Secretária** (500 €): clica numa célula.
 - **Demolir**: clica numa parede, porta ou secretária, ou arrasta para demolir um troço de parede. Sem reembolso.
-- Painel da direita: novo projeto (tipo e funcionalidades), equipa, candidatos, produtos e mercados.
+- Painel da direita: projetos em curso, novo projeto (tipo, funcionalidades, equipa), equipa, candidatos, produtos e mercados.
 
 ## Movimento dos funcionários
 
@@ -55,17 +55,23 @@ Em `npm run dev` ficam disponíveis na consola `__jogo` (estado) e `__ecra(x, z)
   acaba quando todas as áreas estão feitas.
 - **Qualidade** = média das áreas, pesada pela parte de cada uma. Cada área vale a competência de quem a fez × 1,2,
   com máximo de 100%. Sem um designer, um jogo demora e sai fraco.
-- O painel de novo projeto prevê a duração e a qualidade com a equipa atual (`estimarProjeto` em `sim.ts`).
+- **Equipas por projeto:** podes ter vários projetos ao mesmo tempo, cada um com a sua equipa. Quem está "Sem projeto"
+  não trabalha (mas recebe). Ao lançar, a equipa fica livre. Um projeto sem equipa fica parado e pode ser cancelado
+  (o trabalho perde-se).
+- **Coordenação:** numa equipa de n pessoas, cada uma rende 1 / (1 + 0,08 × (n − 1)) (2 → 93%, 3 → 86%, 6 → 71%).
+  Mais gente continua a acabar mais depressa, mas cada pessoa a mais rende menos.
+- O painel de novo projeto prevê a duração e a qualidade com a equipa escolhida (`estimarProjeto` em `sim.ts`).
+  Cada projeto em curso mostra quanto falta (`mesesRestantes`). Na Equipa, a lista de cada pessoa muda-a de projeto.
 - Abaixo de −10 000 € a empresa vai à falência.
 
 ### Tipos de software
 
 | Tipo | Desbloqueia com | Trabalho base | Vendas no 1.º mês* | Queda/mês | Notas |
 |---|---|---|---|---|---|
-| Utilitário | — | 20 000 | 6 900 € | 20% | rápido, vendas modestas |
-| Editor de texto | 1 produto | 35 000 | 5 600 € | 15% | vende durante muito tempo |
-| Antivírus | 2 produtos | 40 000 | 3 800 € | 10% | começa fraco, quase não cai |
-| Jogo | 3 produtos | 50 000 | 22 400 € | 40% | vende muito no início; qualidade conta a dobrar (qualidade^1,5) |
+| Utilitário | — | 20 000 | 7 600 € | 20% | rápido, vendas modestas |
+| Editor de texto | 1 produto | 35 000 | 6 200 € | 15% | vende durante muito tempo |
+| Antivírus | 2 produtos | 30 000 | 4 200 € | 10% | começa fraco, quase não cai |
+| Jogo | 3 produtos | 40 000 | 24 600 € | 40% | vende muito no início; qualidade conta a dobrar (qualidade^1,5) |
 
 \* com qualidade 100%, sem funcionalidades e com o mercado livre. Os valores estão em `TIPOS`, em `src/sim.ts`.
 
@@ -80,21 +86,21 @@ mostra quanto venderia um produto novo de cada tipo.
 ## Equilíbrio (2 primeiros anos)
 
 `npm run simtest` corre 5 jogadores automáticos com 8 sementes. Os que fazem projetos escolhem, entre os tipos
-desbloqueados, o projeto que acabam em 3 meses ou menos e que rende mais por ponto de trabalho.
+desbloqueados, o projeto que a equipa acaba em 3 meses ou menos e que rende mais por mês (pela previsão do jogo).
+Ninguém fica parado: quem está livre forma uma equipa (até 3 pessoas), e uma pessoa sozinha junta-se à equipa mais
+pequena.
 
 | Jogador | Comportamento | Meta |
 |---|---|---|
 | passivo | não faz nada | não ganha dinheiro (acaba abaixo de metade do inicial) |
 | passivo c/ equipa | contrata 2, nunca faz projetos | falência antes do mês 12 |
-| razoável | 2 pessoas, sempre um projeto; contrata com 2+ produtos e 6 meses de reserva | sem falências, vale nos primeiros meses, 60–200k ao fim de 2 anos, ano 2 melhor que o ano 1, pelo menos 3 tipos lançados |
+| razoável | 2 pessoas; contrata com 2+ produtos e 6 meses de reserva | sem falências, vale nos primeiros meses, 60–200k ao fim de 2 anos, ano 2 melhor que o ano 1, pelo menos 3 tipos lançados |
 | só utilitários | como o razoável, mas nunca diversifica | acaba abaixo do razoável |
-| expansão rápida | 6 pessoas no 1.º mês | arriscada: falência em 2+ sementes e dívida em pelo menos metade |
+| expansão rápida | 6 pessoas no 1.º mês | arriscada (falência em 2+ sementes, dívida em pelo menos metade) e não compensa (menos de metade do razoável) |
 
-Resultado atual (mediana): o razoável acaba com cerca de **111k** (pior semente: 5k; caixa mínima: 4k) e o "só
-utilitários" com 67k. O passivo vai à falência no mês 24. A expansão rápida vai à falência em 3 das 8 sementes, mas quem
-sobrevive acaba com cerca de 400k.
+Resultado atual (mediana): o razoável acaba com cerca de **99k** (pior semente: 12k; caixa mínima: 6k) e lança os 4
+tipos. O "só utilitários" acaba com 70k. O passivo vai à falência no mês 24. A expansão rápida vai à falência em 5 das 8
+sementes, mas quem sobrevive acaba com cerca de 285k: é alto risco e alto retorno. Este resultado é sensível aos
+parâmetros (com coordenação 0,1 são 4/8 falências).
 
 Para depurar uma corrida: `DIARIO="razoável:3" npm run simtest` mostra as mensagens do jogo dessa corrida.
-
-**Desequilíbrio conhecido (aviso no simtest):** com vários tipos de software, uma equipa grande que aguente os
-primeiros meses ganha mais do que o razoável. A resolver no ponto 4 (eficiência das equipas).

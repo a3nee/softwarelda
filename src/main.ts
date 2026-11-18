@@ -2,7 +2,8 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import {
-  AREAS, arestaMaisProxima, avancar, estimarProjeto, NOME_AREA, qualidadeDoProjeto, totalDaArea, type Area,
+  AREAS, cancelarProjeto, definirEquipa, eficienciaEquipa, membrosDe, mesesRestantes, type Projeto,
+  arestaMaisProxima, avancar, estimarProjeto, NOME_AREA, qualidadeDoProjeto, totalDaArea, type Area,
   type Competencias, colocarParedes, colocarPorta, colocarSecretaria, comDependencias,
   contratar, demolirArestas, despedir, detetarSalas, ECON, euros, fatorMercado, iniciarProjeto,
   lerAresta, LISTA_TIPOS, minutoDoDia, NADA, NOME_ESTADO, novoJogo, PORTA, removerSecretaria,
@@ -470,26 +471,52 @@ lateral.addEventListener('click', (ev) => {
     funcEscolhidas = [];
   } else if (a === 'projeto') {
     const input = document.getElementById('nome-projeto') as HTMLInputElement | null;
-    r = iniciarProjeto(s, input?.value ?? '', tipoEscolhido, funcEscolhidas);
-    if (r.ok) funcEscolhidas = [];
+    const equipa = equipaEscolhida();
+    if (equipa.length === 0) r = { ok: false, msg: 'Escolhe pelo menos uma pessoa para a equipa.' };
+    else r = iniciarProjeto(s, input?.value ?? '', tipoEscolhido, funcEscolhidas, equipa.map((f) => f.id));
+    if (r.ok) {
+      funcEscolhidas = [];
+      marcacoes.clear();
+      if (input) input.value = '';
+    }
+  } else if (a === 'cancelar') {
+    if (confirm('Cancelar o projeto? O trabalho feito perde-se.')) r = cancelarProjeto(s, Number(b.dataset.id));
   }
   if (!r.ok && r.msg) aviso(r.msg);
   atualizarUI();
 });
 // Funcionalidades: marcar junta as dependências, desmarcar tira o que dependia delas.
+// Equipa do novo projeto: caixas de seleção. Mudar alguém de projeto: lista na Equipa.
 lateral.addEventListener('change', (ev) => {
   const c = ev.target as HTMLInputElement;
   const id = c.dataset.func;
-  if (!id) return;
-  funcEscolhidas = c.checked
-    ? comDependencias(tipoEscolhido, [...funcEscolhidas, id])
-    : semDependentes(tipoEscolhido, funcEscolhidas, id);
+  if (id) {
+    funcEscolhidas = c.checked
+      ? comDependencias(tipoEscolhido, [...funcEscolhidas, id])
+      : semDependentes(tipoEscolhido, funcEscolhidas, id);
+  } else if (c.dataset.membro) {
+    marcacoes.set(Number(c.dataset.membro), c.checked);
+  } else if (c.dataset.equipa) {
+    const valor = (c as unknown as HTMLSelectElement).value;
+    const r = definirEquipa(s, Number(c.dataset.equipa), valor === '' ? null : Number(valor));
+    if (!r.ok && r.msg) aviso(r.msg);
+  }
   atualizarUI();
 });
 
 // Escolhas do próximo projeto (estado só da interface)
 let tipoEscolhido: TipoSoftware = 'utilitario';
 let funcEscolhidas: string[] = [];
+/** Escolhas feitas à mão nas caixas da equipa; quem não foi mexido entra se estiver sem projeto. */
+const marcacoes = new Map<number, boolean>();
+
+function equipaEscolhida(): Funcionario[] {
+  return s.funcionarios.filter((f) => marcacoes.get(f.id) ?? f.projetoId === null);
+}
+
+function estimarProjetoEmCurso(p: Projeto, membros: Funcionario[]): number {
+  return mesesRestantes(p, membros);
+}
 
 const SIGLA_AREA: Record<Area, string> = { programacao: 'Prog', design: 'Des', testes: 'Test' };
 
@@ -531,62 +558,82 @@ function atualizarUI(): void {
   (topo.querySelector('.salas') as HTMLElement).textContent = totalSalas === 1 ? '1 sala' : `${totalSalas} salas`;
 
   const pProjeto = document.getElementById('p-projeto')!;
-  if (s.projeto) {
-    const p = s.projeto;
+  // O campo do nome fica fora das partes redesenhadas, para não perder o foco ao escrever.
+  definir(pProjeto, `<div id="lista-projetos"></div>
+    <h3>Novo projeto</h3>
+    <div class="linha"><input type="text" id="nome-projeto" placeholder="Nome (opcional)" maxlength="30"></div>
+    <div id="config-projeto"></div>`);
+
+  definir(document.getElementById('lista-projetos')!, s.projetos.map((p) => {
     const pct = Math.min(100, (p.trabalhoFeito / p.trabalhoTotal) * 100);
     const funcs = p.funcionalidades.map((id) => TIPOS[p.tipo].funcionalidades.find((f) => f.id === id)!.nome);
-    definir(pProjeto, `<h3>Projeto: ${esc(p.nome)}</h3>
+    const membros = membrosDe(s, p.id);
+    const prev = estimarProjetoEmCurso(p, membros);
+    return `<div class="projeto">
+      <div class="linha"><h3>${esc(p.nome)}</h3><button data-acao="cancelar" data-id="${p.id}" title="O trabalho feito perde-se">Cancelar</button></div>
       <div class="sub">${TIPOS[p.tipo].nome}${funcs.length ? ` · ${funcs.join(', ')}` : ''}</div>
       <div class="barra"><div style="width:${pct.toFixed(1)}%"></div></div>
-      <div class="sub">${pct.toFixed(0)}% concluído · qualidade até agora ${Math.round(qualidadeDoProjeto(p) * 100)}%</div>
+      <div class="sub">${pct.toFixed(0)}% · qualidade ${Math.round(qualidadeDoProjeto(p) * 100)}%
+        · ${Number.isFinite(prev) ? `faltam ~${prev.toFixed(1).replace('.', ',')} meses` : 'parado'}</div>
       ${AREAS.filter((a) => totalDaArea(p, a) > 0).map((a) => {
         const v = Math.min(100, (p.feito[a] / totalDaArea(p, a)) * 100);
         return `<div class="area"><span class="sub">${NOME_AREA[a]}</span>
           <div class="barra fina"><div style="width:${v.toFixed(1)}%"></div></div></div>`;
-      }).join('')}`);
-  } else {
-    // O campo do nome fica fora da parte que é redesenhada, para não perder o foco ao escrever.
-    definir(pProjeto, `<h3>Novo projeto</h3>
-      <div class="linha"><input type="text" id="nome-projeto" placeholder="Nome (opcional)" maxlength="30"></div>
-      <div id="config-projeto"></div>`);
-    if (!tipoDisponivel(s, tipoEscolhido)) tipoEscolhido = 'utilitario';
-    const def = TIPOS[tipoEscolhido];
-    const trabalho = trabalhoDoProjeto(tipoEscolhido, funcEscolhidas);
-    const previsao = estimarProjeto(s.funcionarios, tipoEscolhido, funcEscolhidas);
-    const qualidade = previsao.qualidade;
-    const mercado = fatorMercado(s, tipoEscolhido);
-    const vendas = vendasIniciais(tipoEscolhido, funcEscolhidas, qualidade, mercado);
-    const tipos = LISTA_TIPOS.map((t) => {
-      const livre = tipoDisponivel(s, t);
-      const n = TIPOS[t].produtosNecessarios;
-      return `<button data-acao="tipo" data-tipo="${t}" class="${t === tipoEscolhido ? 'ativo' : ''}" ${livre ? '' : 'disabled'}
-        title="${livre ? TIPOS[t].descricao : `Precisa de ${n} produto${n === 1 ? '' : 's'} lançado${n === 1 ? '' : 's'}`}">${livre ? '' : '🔒 '}${TIPOS[t].nome}</button>`;
-    }).join('');
-    const funcs = def.funcionalidades.map((f) => {
-      const req = f.requer.map((r) => def.funcionalidades.find((o) => o.id === r)!.nome);
-      return `<label class="func"><input type="checkbox" data-func="${f.id}" ${funcEscolhidas.includes(f.id) ? 'checked' : ''}>
-        <span>${f.nome}<div class="sub">+${(f.trabalho / 1000).toFixed(0)}k pontos · +${Math.round(f.valor * 100)}% vendas${req.length ? ` · precisa de ${req.join(', ')}` : ''}</div></span></label>`;
-    }).join('');
-    const meses = previsao.meses;
-    const areas = AREAS.map((a) => `${NOME_AREA[a]} ${Math.round(def.areas[a] * 100)}%`).join(' · ');
-    definir(document.getElementById('config-projeto')!, `
-      <div class="tipos">${tipos}</div>
-      <div class="sub">${def.descricao}</div>
-      <div class="sub">Trabalho por área: ${areas}</div>
-      ${funcs ? `<div class="funcs">${funcs}</div>` : ''}
-      <div class="sub">Trabalho: ${trabalho.toLocaleString('pt-PT')} pontos
-        (${Number.isFinite(meses) ? `~${meses.toFixed(1).replace('.', ',')} meses com a equipa atual` : s.funcionarios.length ? 'mais de 3 anos' : 'sem equipa'})</div>
-      <div class="sub ${mercado < 0.7 ? 'aviso' : ''}">Vendas no 1.º mês: ~${euros(vendas)}
-        (qualidade ~${Math.round(qualidade * 100)}%, mercado ${Math.round(mercado * 100)}%)</div>
-      <div class="linha"><button data-acao="projeto">Começar desenvolvimento</button></div>`);
-  }
+      }).join('')}
+      <div class="sub ${membros.length ? '' : 'aviso'}">${membros.length
+        ? `Equipa: ${membros.map((f) => esc(f.nome.split(' ')[0])).join(', ')}${membros.length > 1 ? ` (rendimento ${Math.round(eficienciaEquipa(membros.length) * 100)}% por pessoa)` : ''}`
+        : 'Sem equipa: o projeto está parado.'}</div>
+    </div>`;
+  }).join(''));
+
+  if (!tipoDisponivel(s, tipoEscolhido)) tipoEscolhido = 'utilitario';
+  const def = TIPOS[tipoEscolhido];
+  const equipa = equipaEscolhida();
+  const trabalho = trabalhoDoProjeto(tipoEscolhido, funcEscolhidas);
+  const previsao = estimarProjeto(equipa, tipoEscolhido, funcEscolhidas);
+  const qualidade = previsao.qualidade;
+  const mercado = fatorMercado(s, tipoEscolhido);
+  const vendas = vendasIniciais(tipoEscolhido, funcEscolhidas, qualidade, mercado);
+  const tipos = LISTA_TIPOS.map((t) => {
+    const livre = tipoDisponivel(s, t);
+    const n = TIPOS[t].produtosNecessarios;
+    return `<button data-acao="tipo" data-tipo="${t}" class="${t === tipoEscolhido ? 'ativo' : ''}" ${livre ? '' : 'disabled'}
+      title="${livre ? TIPOS[t].descricao : `Precisa de ${n} produto${n === 1 ? '' : 's'} lançado${n === 1 ? '' : 's'}`}">${livre ? '' : '🔒 '}${TIPOS[t].nome}</button>`;
+  }).join('');
+  const funcs = def.funcionalidades.map((f) => {
+    const req = f.requer.map((r) => def.funcionalidades.find((o) => o.id === r)!.nome);
+    return `<label class="func"><input type="checkbox" data-func="${f.id}" ${funcEscolhidas.includes(f.id) ? 'checked' : ''}>
+      <span>${f.nome}<div class="sub">+${(f.trabalho / 1000).toFixed(0)}k pontos · +${Math.round(f.valor * 100)}% vendas${req.length ? ` · precisa de ${req.join(', ')}` : ''}</div></span></label>`;
+  }).join('');
+  const pessoas = s.funcionarios.map((f) => {
+    const outro = s.projetos.find((p) => p.id === f.projetoId);
+    return `<label class="func"><input type="checkbox" data-membro="${f.id}" ${equipa.includes(f) ? 'checked' : ''}>
+      <span>${esc(f.nome)}<div class="sub">${textoCompetencias(f.competencias)}${outro ? ` · sai de «${esc(outro.nome)}»` : ''}</div></span></label>`;
+  }).join('');
+  const meses = previsao.meses;
+  const areas = AREAS.map((a) => `${NOME_AREA[a]} ${Math.round(def.areas[a] * 100)}%`).join(' · ');
+  definir(document.getElementById('config-projeto')!, `
+    <div class="tipos">${tipos}</div>
+    <div class="sub">${def.descricao}</div>
+    <div class="sub">Trabalho por área: ${areas}</div>
+    ${funcs ? `<div class="funcs">${funcs}</div>` : ''}
+    <div class="sub">Equipa${equipa.length > 1 ? ` (rendimento ${Math.round(eficienciaEquipa(equipa.length) * 100)}% por pessoa)` : ''}:</div>
+    ${pessoas ? `<div class="funcs">${pessoas}</div>` : '<div class="sub aviso">Contrata alguém primeiro.</div>'}
+    <div class="sub">Trabalho: ${trabalho.toLocaleString('pt-PT')} pontos
+      (${Number.isFinite(meses) ? `~${meses.toFixed(1).replace('.', ',')} meses com esta equipa` : equipa.length ? 'mais de 3 anos' : 'sem equipa'})</div>
+    <div class="sub ${mercado < 0.7 ? 'aviso' : ''}">Vendas no 1.º mês: ~${euros(vendas)}
+      (qualidade ~${Math.round(qualidade * 100)}%, mercado ${Math.round(mercado * 100)}%)</div>
+    <div class="linha"><button data-acao="projeto">Começar desenvolvimento</button></div>`);
 
   const salarios = s.funcionarios.reduce((t, f) => t + f.salario, 0);
+  const opcoes = (f: Funcionario) => [`<option value="" ${f.projetoId === null ? 'selected' : ''}>Sem projeto</option>`,
+    ...s.projetos.map((p) => `<option value="${p.id}" ${f.projetoId === p.id ? 'selected' : ''}>${esc(p.nome)}</option>`)].join('');
   definir(document.getElementById('p-equipa')!, `<h3>Equipa (${s.funcionarios.length}) — ${euros(salarios)}/mês</h3>
     ${s.funcionarios.length === 0 ? '<div class="sub">Ainda não tens funcionários.</div>' : ''}
     ${s.funcionarios.map((f) => `<div class="linha">
-      <div>${f.nome}<div class="sub ${['semSecretaria', 'semAcesso', 'preso'].includes(f.estado) ? 'aviso' : ''}">
-        ${NOME_ESTADO[f.estado]} · 😊 ${Math.round(f.felicidade)}</div><div class="sub">${textoCompetencias(f.competencias)}</div></div>
+      <div>${esc(f.nome)}<div class="sub ${['semSecretaria', 'semAcesso', 'preso'].includes(f.estado) ? 'aviso' : ''}">
+        ${NOME_ESTADO[f.estado]} · 😊 ${Math.round(f.felicidade)}</div><div class="sub">${textoCompetencias(f.competencias)}</div>
+        <select data-equipa="${f.id}" class="${f.projetoId === null ? 'aviso' : ''}">${opcoes(f)}</select></div>
       <button data-acao="despedir" data-id="${f.id}">Despedir</button></div>`).join('')}`);
 
   definir(document.getElementById('p-candidatos')!, `<h3>Candidatos</h3>

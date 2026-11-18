@@ -5,7 +5,7 @@
 import {
   avancar, colocarSecretaria, contratar, ECON, fatorMercado, iniciarProjeto, LISTA_TIPOS, MIN_POR_DIA,
   MIN_POR_MES, novoJogo, textoData, tipoDisponivel, TIPOS, validarFuncionalidades, vendasIniciais,
-  AREAS, competenciaMedia, estimarProjeto, type Area, type Competencias, type Estado, type TipoSoftware,
+  AREAS, competenciaMedia, definirEquipa, estimarProjeto, membrosDe, semProjeto, type Funcionario, type Area, type Competencias, type Estado, type TipoSoftware,
 } from './sim.ts';
 
 const MESES = 24;
@@ -80,13 +80,15 @@ function combinacoes(tipo: TipoSoftware): string[][] {
  * (pela previsão do jogo) e que rende mais por mês de trabalho (qualidade prevista, mercado e curva
  * de vendas). Se nada couber em 3 meses, o mais rápido.
  */
-function escolherProjeto(s: Estado, tipos: TipoSoftware[]): { tipo: TipoSoftware; funcionalidades: string[] } {
+function escolherProjeto(
+  s: Estado, tipos: TipoSoftware[], equipa: Funcionario[],
+): { tipo: TipoSoftware; funcionalidades: string[] } {
   let melhor = { tipo: 'utilitario' as TipoSoftware, funcionalidades: [] as string[] };
   let pontuacao = -Infinity;
   for (const tipo of tipos) {
     if (!tipoDisponivel(s, tipo)) continue;
     for (const escolha of combinacoes(tipo)) {
-      const e = estimarProjeto(s.funcionarios, tipo, escolha);
+      const e = estimarProjeto(equipa, tipo, escolha);
       const receita = vendasIniciais(tipo, escolha, e.qualidade, fatorMercado(s, tipo)) / (1 - TIPOS[tipo].queda);
       const p = e.meses <= 3 ? receita / e.meses : -1e9 - e.meses; // fora do limite: só conta a rapidez
       if (p > pontuacao) {
@@ -98,10 +100,26 @@ function escolherProjeto(s: Estado, tipos: TipoSoftware[]): { tipo: TipoSoftware
   return melhor;
 }
 
-function novoProjeto(s: Estado, tipos: TipoSoftware[] = LISTA_TIPOS): void {
-  if (s.projeto) return;
-  const e = escolherProjeto(s, tipos);
-  iniciarProjeto(s, '', e.tipo, e.funcionalidades);
+/** Tamanho máximo das equipas que os jogadores formam. */
+const TAMANHO_EQUIPA = 3;
+
+/**
+ * Ninguém fica parado: quem está livre forma uma equipa nova (até TAMANHO_EQUIPA pessoas) com o
+ * melhor projeto para essa equipa; uma pessoa sozinha, havendo projetos, junta-se à equipa mais pequena.
+ */
+function gerirEquipas(s: Estado, tipos: TipoSoftware[] = LISTA_TIPOS): void {
+  for (let livres = semProjeto(s); livres.length > 0; livres = semProjeto(s)) {
+    const menor = s.projetos
+      .map((p) => ({ p, n: membrosDe(s, p.id).length }))
+      .sort((a, b) => a.n - b.n)[0];
+    if (livres.length === 1 && menor && menor.n < TAMANHO_EQUIPA) {
+      definirEquipa(s, livres[0].id, menor.p.id);
+      continue;
+    }
+    const equipa = livres.slice(0, TAMANHO_EQUIPA);
+    const e = escolherProjeto(s, tipos, equipa);
+    iniciarProjeto(s, '', e.tipo, e.funcionalidades, equipa.map((f) => f.id));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -109,7 +127,7 @@ function novoProjeto(s: Estado, tipos: TipoSoftware[] = LISTA_TIPOS): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Contrata 2, tem sempre um projeto em curso e só cresce com 2+ produtos lançados
+ * Contrata 2, põe toda a gente a trabalhar (equipas de até 3) e só cresce com 2+ produtos lançados
  * e uma reserva de 6 meses de despesas (já a contar com o novo salário). Máximo 6 pessoas.
  */
 function prudente(tipos: TipoSoftware[]): Jogador {
@@ -118,7 +136,7 @@ function prudente(tipos: TipoSoftware[]): Jogador {
       contratarMelhor(s);
       contratarMelhor(s);
     }
-    novoProjeto(s, tipos);
+    gerirEquipas(s, tipos);
     const c = s.candidatos[melhorCandidato(s)];
     if (c && s.produtos.length >= 2 && s.funcionarios.length < 6
       && s.dinheiro > RESERVA * (despesasMensais(s) + c.salario))
@@ -143,10 +161,10 @@ const JOGADORES: Record<string, Jogador> = {
   /** Como o razoável, mas só faz utilitários (nunca diversifica). */
   'só utilitários': prudente(['utilitario']),
 
-  /** Contrata 6 pessoas no 1.º mês e tem sempre um projeto em curso. */
+  /** Contrata 6 pessoas no 1.º mês e põe toda a gente a trabalhar. */
   'expansão rápida': (s, dia) => {
     if (dia === 0 || dia === 30) for (let i = 0; i < 3; i++) contratarMelhor(s);
-    novoProjeto(s);
+    gerirEquipas(s);
   },
 };
 
@@ -286,18 +304,8 @@ meta('Expansão rápida é arriscada: vai à falência em pelo menos 2 das 8 sem
 meta('Expansão rápida entra em dívida (caixa < 0) em pelo menos metade das sementes',
   rapida.filter((c) => c.minimo < 0).length >= SEMENTES.length / 2);
 
-// Avisos: desequilíbrios conhecidos que ainda não falham (ficam visíveis até serem resolvidos).
-let avisos = 0;
-function aviso(descricao: string, ok: boolean): void {
-  if (!ok) {
-    avisos++;
-    console.log(`⚠ ${descricao}`);
-  }
-}
-aviso('Expansão rápida não compensa: acaba com menos de metade do razoável (mediana, falências incluídas). '
-  + 'Quem sobrevive com 6 pessoas ganha mais, porque há jogos e editores grandes para fazer. '
-  + 'A resolver no ponto 4 (eficiência das equipas).',
+meta('Expansão rápida não compensa: acaba com menos de metade do razoável (mediana, falências incluídas)',
   mediana(rapida.map((c) => c.final)) < mediana(finaisRazoavel) / 2);
 
 if (falhas) throw new Error(`${falhas} meta(s) de equilíbrio falharam.`);
-console.log(`\nTodas as metas cumpridas${avisos ? ` (${avisos} aviso${avisos > 1 ? 's' : ''})` : ''}.`);
+console.log('\nTodas as metas cumpridas.');

@@ -33,3 +33,7 @@ label.func input { margin-top: 3px; }
 .area { display: grid; grid-template-columns: 80px 1fr; align-items: center; gap: 6px; }
 .barra.fina { height: 5px; margin: 3px 0; }
 .sub b { color: #dde; font-weight: 600; }
+.projeto { border-bottom: 1px solid #39405a; padding-bottom: 8px; margin-bottom: 8px; }
+.projeto h3 { margin: 0; }
+select { background: #11141f; color: #eef; border: 1px solid #4a5378; border-radius: 6px; font: inherit; font-size: 12px; margin-top: 3px; padding: 2px 4px; }
+select.aviso { border-color: #ffb86b; }

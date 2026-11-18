@@ -31,6 +31,7 @@ export const ECON = {
   limiteFalencia: -10000,
   salarioBase: 1000, // salário = salarioBase + competência × salarioPorCompetencia
   salarioPorCompetencia: 2500,
+  coordenacao: 0.08, // cada membro de uma equipa de n rende 1 / (1 + coordenacao × (n − 1))
   saturacao: 0.8, // vendas de um produto novo ÷ (1 + saturacao × ocupação do mercado do seu tipo)
 };
 
@@ -78,7 +79,7 @@ export const TIPOS: Record<TipoSoftware, DefTipo> = {
     descricao: 'Pequeno e rápido de fazer. Vendas modestas, que caem depressa.',
     produtosNecessarios: 0,
     trabalho: 20000,
-    vendas: 6900,
+    vendas: 7600,
     queda: 0.8,
     exigencia: 1,
     areas: { programacao: 0.6, design: 0.2, testes: 0.2 },
@@ -94,7 +95,7 @@ export const TIPOS: Record<TipoSoftware, DefTipo> = {
     descricao: 'Mais trabalho, mas continua a vender durante muito tempo.',
     produtosNecessarios: 1,
     trabalho: 35000,
-    vendas: 5600,
+    vendas: 6200,
     queda: 0.85,
     exigencia: 1,
     areas: { programacao: 0.5, design: 0.3, testes: 0.2 },
@@ -110,8 +111,8 @@ export const TIPOS: Record<TipoSoftware, DefTipo> = {
     plural: 'Antivírus',
     descricao: 'Vendas baixas no lançamento, mas os clientes ficam: as vendas quase não caem.',
     produtosNecessarios: 2,
-    trabalho: 40000,
-    vendas: 3800,
+    trabalho: 30000,
+    vendas: 4200,
     queda: 0.9,
     exigencia: 1,
     areas: { programacao: 0.5, design: 0.1, testes: 0.4 },
@@ -126,8 +127,8 @@ export const TIPOS: Record<TipoSoftware, DefTipo> = {
     plural: 'Jogos',
     descricao: 'Muito trabalho e vendas fortes, mas só no início. Exige uma equipa competente.',
     produtosNecessarios: 3,
-    trabalho: 50000,
-    vendas: 22400,
+    trabalho: 40000,
+    vendas: 24600,
     queda: 0.6,
     exigencia: 1.5,
     areas: { programacao: 0.4, design: 0.45, testes: 0.15 },
@@ -248,6 +249,7 @@ export interface Funcionario {
   id: number;
   nome: string;
   competencias: Competencias;
+  projetoId: number | null; // equipa a que pertence (null = sem projeto, não trabalha)
   salario: number; // € por mês
   felicidade: number; // 0..100
   secretariaId: number | null;
@@ -273,6 +275,7 @@ export interface Secretaria {
 }
 
 export interface Projeto {
+  id: number;
   nome: string;
   tipo: TipoSoftware;
   funcionalidades: string[];
@@ -308,7 +311,7 @@ export interface Estado {
   secretarias: Secretaria[];
   paredesV: number[]; // (largura + 1) * altura — ver Aresta
   paredesH: number[]; // largura * (altura + 1)
-  projeto: Projeto | null;
+  projetos: Projeto[]; // em desenvolvimento, cada um com a sua equipa
   produtos: Produto[];
   mensagens: Mensagem[];
   falencia: boolean;
@@ -358,7 +361,7 @@ export function novoJogo(semente = 12345, largura = 24, altura = 18): Estado {
     secretarias: [],
     paredesV: new Array((largura + 1) * altura).fill(NADA),
     paredesH: new Array(largura * (altura + 1)).fill(NADA),
-    projeto: null,
+    projetos: [],
     produtos: [],
     mensagens: [],
     falencia: false,
@@ -651,6 +654,7 @@ export function contratar(s: Estado, indice: number): Resultado {
     id: s.proximoId++,
     nome: c.nome,
     competencias: { ...c.competencias },
+    projetoId: null,
     salario: c.salario,
     felicidade: 70,
     secretariaId: null,
@@ -682,10 +686,37 @@ export function despedir(s: Estado, id: number): Resultado {
 // Projetos e produtos
 // ---------------------------------------------------------------------------
 
+export function membrosDe(s: Estado, projetoId: number): Funcionario[] {
+  return s.funcionarios.filter((f) => f.projetoId === projetoId);
+}
+
+export function semProjeto(s: Estado): Funcionario[] {
+  return s.funcionarios.filter((f) => f.projetoId === null);
+}
+
+/** Rendimento de cada membro de uma equipa de n pessoas (coordenação: equipas grandes rendem menos por pessoa). */
+export function eficienciaEquipa(n: number): number {
+  return n <= 1 ? 1 : 1 / (1 + ECON.coordenacao * (n - 1));
+}
+
+/** Põe um funcionário na equipa de um projeto (ou tira-o, com null). */
+export function definirEquipa(s: Estado, funcionarioId: number, projetoId: number | null): Resultado {
+  const f = s.funcionarios.find((o) => o.id === funcionarioId);
+  if (!f) return { ok: false, msg: 'Funcionário desconhecido.' };
+  if (projetoId !== null && !s.projetos.some((p) => p.id === projetoId))
+    return { ok: false, msg: 'Projeto desconhecido.' };
+  f.projetoId = projetoId;
+  return { ok: true };
+}
+
+/**
+ * Começa um projeto. A equipa são os funcionários indicados (por omissão, todos os que estão sem
+ * projeto); quem já estava noutro projeto muda de equipa.
+ */
 export function iniciarProjeto(
   s: Estado, nome: string, tipo: TipoSoftware = 'utilitario', funcionalidades: string[] = [],
+  equipa: number[] = semProjeto(s).map((f) => f.id),
 ): Resultado {
-  if (s.projeto) return { ok: false, msg: 'Já há um projeto em curso.' };
   const def = TIPOS[tipo];
   if (!def) return { ok: false, msg: 'Tipo de software desconhecido.' };
   if (!tipoDisponivel(s, tipo)) {
@@ -694,9 +725,13 @@ export function iniciarProjeto(
   }
   const v = validarFuncionalidades(tipo, funcionalidades);
   if (!v.ok) return v;
-  const doTipo = s.produtos.filter((p) => p.tipo === tipo).length;
+  if (equipa.some((id) => !s.funcionarios.some((f) => f.id === id)))
+    return { ok: false, msg: 'Funcionário desconhecido.' };
+  const doTipo = s.produtos.filter((p) => p.tipo === tipo).length + s.projetos.filter((p) => p.tipo === tipo).length;
   const limpo = nome.trim() || `${def.nome} ${doTipo + 1}`;
-  s.projeto = {
+  const id = s.proximoId++;
+  s.projetos.push({
+    id,
     nome: limpo,
     tipo,
     funcionalidades: comDependencias(tipo, funcionalidades),
@@ -704,8 +739,21 @@ export function iniciarProjeto(
     trabalhoTotal: trabalhoDoProjeto(tipo, funcionalidades),
     feito: { programacao: 0, design: 0, testes: 0 },
     somaQualidade: { programacao: 0, design: 0, testes: 0 },
-  };
-  mensagem(s, `Começou o desenvolvimento de «${limpo}» (${def.nome.toLowerCase()}).`);
+  });
+  for (const fid of equipa) definirEquipa(s, fid, id);
+  const n = equipa.length;
+  mensagem(s, `Começou o desenvolvimento de «${limpo}» (${def.nome.toLowerCase()}), `
+    + (n ? `com ${n} pessoa${n === 1 ? '' : 's'}.` : 'ainda sem equipa.'));
+  return { ok: true };
+}
+
+/** Abandona um projeto em curso: o trabalho perde-se e a equipa fica livre. */
+export function cancelarProjeto(s: Estado, projetoId: number): Resultado {
+  const p = s.projetos.find((o) => o.id === projetoId);
+  if (!p) return { ok: false };
+  for (const f of membrosDe(s, projetoId)) f.projetoId = null;
+  s.projetos = s.projetos.filter((o) => o !== p);
+  mensagem(s, `O projeto «${p.nome}» foi cancelado.`);
   return { ok: true };
 }
 
@@ -757,10 +805,10 @@ export function areaDeTrabalho(p: TrabalhoPorAreas, f: Trabalhador): Area | null
   return melhor;
 }
 
-function trabalharUmMinuto(p: TrabalhoPorAreas, f: Trabalhador, minutos: number): void {
+function trabalharUmMinuto(p: TrabalhoPorAreas, f: Trabalhador, minutos: number, eficiencia: number): void {
   const a = areaDeTrabalho(p, f);
   if (!a) return;
-  const r = rendimento(f, a) * minutos;
+  const r = rendimento(f, a) * minutos * eficiencia;
   p.feito[a] += r;
   p.somaQualidade[a] += r * f.competencias[a];
   p.trabalhoFeito += r;
@@ -787,25 +835,34 @@ export function qualidadeDoProjeto(p: TrabalhoPorAreas): number {
 export function estimarProjeto(
   equipa: Trabalhador[], tipo: TipoSoftware, funcionalidades: string[],
 ): { meses: number; qualidade: number } {
-  const p: TrabalhoPorAreas = {
+  return simularAteAcabar({
     tipo,
     trabalhoTotal: trabalhoDoProjeto(tipo, funcionalidades),
     trabalhoFeito: 0,
     feito: { programacao: 0, design: 0, testes: 0 },
     somaQualidade: { programacao: 0, design: 0, testes: 0 },
-  };
-  if (equipa.length === 0) return { meses: Infinity, qualidade: 0 };
+  }, equipa);
+}
+
+/** Meses que faltam a um projeto em curso com esta equipa (Infinity se parado). */
+export function mesesRestantes(p: Projeto, equipa: Trabalhador[]): number {
+  return simularAteAcabar(
+    { ...p, feito: { ...p.feito }, somaQualidade: { ...p.somaQualidade } }, equipa).meses;
+}
+
+function simularAteAcabar(p: TrabalhoPorAreas, equipa: Trabalhador[]): { meses: number; qualidade: number } {
+  if (equipa.length === 0) return { meses: Infinity, qualidade: qualidadeDoProjeto(p) };
   const LIMITE = 36 * DIAS_POR_MES * 8;
+  const ef = eficienciaEquipa(equipa.length);
   let horas = 0;
   while (!projetoAcabado(p) && horas < LIMITE) {
-    for (const f of equipa) trabalharUmMinuto(p, f, 60);
+    for (const f of equipa) trabalharUmMinuto(p, f, 60, ef);
     horas++;
   }
   return { meses: projetoAcabado(p) ? horas / 8 / DIAS_POR_MES : Infinity, qualidade: qualidadeDoProjeto(p) };
 }
 
-function lancarProjeto(s: Estado): void {
-  const p = s.projeto!;
+function lancarProjeto(s: Estado, p: Projeto): void {
   const qualidade = qualidadeDoProjeto(p);
   const mercado = fatorMercado(s, p.tipo);
   const produto: Produto = {
@@ -818,10 +875,11 @@ function lancarProjeto(s: Estado): void {
     lancadoEm: s.minuto,
   };
   s.produtos.push(produto);
-  s.projeto = null;
+  s.projetos = s.projetos.filter((o) => o !== p);
+  for (const f of membrosDe(s, p.id)) f.projetoId = null;
   const perda = Math.round((1 - mercado) * 100);
   const novos = LISTA_TIPOS.filter((t) => TIPOS[t].produtosNecessarios === s.produtos.length);
-  mensagem(s, `«${produto.nome}» foi lançado! Qualidade ${Math.round(qualidade * 100)}%.`
+  mensagem(s, `«${produto.nome}» foi lançado! Qualidade ${Math.round(qualidade * 100)}%. A equipa está livre.`
     + (perda >= 5 ? ` O mercado de ${TIPOS[p.tipo].plural.toLowerCase()} está saturado: vendas −${perda}%.` : ''));
   for (const t of novos) mensagem(s, `Novo tipo de software disponível: ${TIPOS[t].nome.toLowerCase()}.`);
 }
@@ -993,6 +1051,10 @@ function minutoSeguinte(s: Estado): void {
   s.minuto++;
   const md = minutoDoDia(s);
   const horario = md >= HORA_INICIO * 60 && md < HORA_FIM * 60;
+  // Tamanho de cada equipa (a eficiência conta com a equipa inteira, esteja ou não toda presente).
+  const tamanho = new Map<number, number>();
+  for (const f of s.funcionarios)
+    if (f.projetoId !== null) tamanho.set(f.projetoId, (tamanho.get(f.projetoId) ?? 0) + 1);
 
   for (const f of s.funcionarios) {
     if (!f.dentro) {
@@ -1015,12 +1077,13 @@ function minutoSeguinte(s: Estado): void {
           f.estado = 'aTrabalhar';
         }
       }
-    } else if (f.estado === 'aTrabalhar' && horario && s.projeto) {
-      trabalharUmMinuto(s.projeto, f, 1);
+    } else if (f.estado === 'aTrabalhar' && horario && f.projetoId !== null) {
+      const p = s.projetos.find((o) => o.id === f.projetoId);
+      if (p) trabalharUmMinuto(p, f, 1, eficienciaEquipa(tamanho.get(p.id) ?? 1));
     }
   }
 
-  if (s.projeto && projetoAcabado(s.projeto)) lancarProjeto(s);
+  for (const p of s.projetos.filter(projetoAcabado)) lancarProjeto(s, p);
 
   if (md === 0) fimDoDia(s);
   if (s.minuto % MIN_POR_MES === 0) fimDoMes(s);
