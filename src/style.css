@@ -37,3 +37,5 @@ label.func input { margin-top: 3px; }
 .projeto h3 { margin: 0; }
 select { background: #11141f; color: #eef; border: 1px solid #4a5378; border-radius: 6px; font: inherit; font-size: 12px; margin-top: 3px; padding: 2px 4px; }
 select.aviso { border-color: #ffb86b; }
+#topo .jogo { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+#fim .linha { margin-top: 14px; justify-content: center; gap: 10px; font-size: 14px; }

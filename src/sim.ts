@@ -1040,6 +1040,121 @@ function andar(f: Funcionario): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Guardar e carregar (o Estado é JSON puro; o aleatório vive em s.semente)
+// ---------------------------------------------------------------------------
+
+export const VERSAO_SAVE = 1;
+
+export interface Save {
+  versao: number;
+  guardadoEm: number; // Date.now() de quando foi guardado
+  estado: Estado;
+}
+
+export function exportarJogo(s: Estado, guardadoEm = Date.now()): string {
+  const save: Save = { versao: VERSAO_SAVE, guardadoEm, estado: s };
+  return JSON.stringify(save);
+}
+
+export type ResultadoCarregar = { ok: true; estado: Estado; guardadoEm: number } | { ok: false; msg: string };
+
+/** Lê um save e valida-o por inteiro: um save corrompido nunca chega ao jogo. */
+export function importarJogo(texto: string): ResultadoCarregar {
+  let o: unknown;
+  try {
+    o = JSON.parse(texto);
+  } catch {
+    return { ok: false, msg: 'O ficheiro guardado está corrompido (não é JSON válido).' };
+  }
+  if (!objeto(o) || typeof o.versao !== 'number') return { ok: false, msg: 'Isto não é um jogo guardado.' };
+  if (o.versao > VERSAO_SAVE) return { ok: false, msg: 'Este jogo foi guardado numa versão mais recente.' };
+  const erro = erroNoEstado(o.estado);
+  if (erro) return { ok: false, msg: `Jogo guardado inválido: ${erro}.` };
+  return { ok: true, estado: o.estado as Estado, guardadoEm: typeof o.guardadoEm === 'number' ? o.guardadoEm : 0 };
+}
+
+/** Mês de jogo em que estamos (0 = o primeiro); muda no fecho de cada mês. */
+export function mesDeJogo(s: Estado): number {
+  return Math.floor(s.minuto / MIN_POR_MES);
+}
+
+type Obj = Record<string, unknown>;
+function objeto(v: unknown): v is Obj {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+function numero(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v);
+}
+function inteiro(v: unknown): v is number {
+  return Number.isInteger(v);
+}
+function competenciasValidas(v: unknown): boolean {
+  return objeto(v) && AREAS.every((a) => numero(v[a]) && v[a] >= 0);
+}
+function celulaValida(v: unknown, largura: number, altura: number): boolean {
+  return objeto(v) && numero(v.x) && numero(v.z) && v.x >= 0 && v.z >= 0 && v.x < largura && v.z < altura;
+}
+
+/** Devolve a descrição do primeiro problema, ou null se o estado estiver bom. */
+function erroNoEstado(e: unknown): string | null {
+  if (!objeto(e)) return 'falta o estado';
+  for (const k of ['minuto', 'dinheiro', 'semente', 'proximoId', 'versaoMapa'])
+    if (!numero(e[k])) return `campo «${k}» em falta`;
+  const L = e.largura, A = e.altura;
+  if (!inteiro(L) || !inteiro(A) || L < 2 || A < 2 || L > 200 || A > 200) return 'tamanho do terreno';
+  if (!celulaValida(e.entrada, L, A)) return 'entrada fora do terreno';
+  if (typeof e.falencia !== 'boolean') return 'campo «falencia» em falta';
+  const arestas = (v: unknown, n: number) =>
+    Array.isArray(v) && v.length === n && v.every((x) => x === NADA || x === PAREDE || x === PORTA);
+  if (!arestas(e.paredesV, (L + 1) * A) || !arestas(e.paredesH, L * (A + 1))) return 'paredes';
+  for (const k of ['funcionarios', 'candidatos', 'secretarias', 'projetos', 'produtos', 'mensagens'])
+    if (!Array.isArray(e[k])) return `lista «${k}» em falta`;
+  const proximoId = e.proximoId as number;
+  const idValido = (v: unknown) => inteiro(v) && v > 0 && v < proximoId;
+
+  const secretarias = new Set<number>();
+  for (const d of e.secretarias as unknown[]) {
+    if (!objeto(d) || !idValido(d.id) || !celulaValida(d, L, A)) return 'secretária';
+    if (secretarias.has(d.id as number)) return 'secretária repetida';
+    secretarias.add(d.id as number);
+  }
+  const projetos = new Set<number>();
+  for (const p of e.projetos as unknown[]) {
+    if (!objeto(p) || !idValido(p.id) || typeof p.nome !== 'string') return 'projeto';
+    if (typeof p.tipo !== 'string' || !(p.tipo in TIPOS)) return 'tipo de projeto desconhecido';
+    if (!Array.isArray(p.funcionalidades) || !p.funcionalidades.every((f) => typeof f === 'string')
+      || !validarFuncionalidades(p.tipo as TipoSoftware, p.funcionalidades as string[]).ok) return 'funcionalidades do projeto';
+    if (!numero(p.trabalhoFeito) || !numero(p.trabalhoTotal) || p.trabalhoTotal <= 0) return 'trabalho do projeto';
+    if (!competenciasValidas(p.feito) || !competenciasValidas(p.somaQualidade)) return 'áreas do projeto';
+    if (projetos.has(p.id as number)) return 'projeto repetido';
+    projetos.add(p.id as number);
+  }
+  const funcionarios = new Set<number>();
+  for (const f of e.funcionarios as unknown[]) {
+    if (!objeto(f) || !idValido(f.id) || typeof f.nome !== 'string') return 'funcionário';
+    if (funcionarios.has(f.id as number)) return 'funcionário repetido';
+    funcionarios.add(f.id as number);
+    if (!competenciasValidas(f.competencias)) return 'competências';
+    if (!numero(f.salario) || !numero(f.felicidade) || !numero(f.x) || !numero(f.z) || !numero(f.horaChegada)
+      || !numero(f.versaoCaminho)) return 'funcionário';
+    if (f.projetoId !== null && !projetos.has(f.projetoId as number)) return 'funcionário num projeto que não existe';
+    if (f.secretariaId !== null && !secretarias.has(f.secretariaId as number)) return 'funcionário numa secretária que não existe';
+    if (typeof f.estado !== 'string' || !(f.estado in NOME_ESTADO)) return 'estado de funcionário desconhecido';
+    if (typeof f.dentro !== 'boolean') return 'funcionário';
+    if (!Array.isArray(f.caminho) || !f.caminho.every((c) => celulaValida(c, L, A))) return 'caminho';
+  }
+  for (const c of e.candidatos as unknown[])
+    if (!objeto(c) || typeof c.nome !== 'string' || !competenciasValidas(c.competencias) || !numero(c.salario)) return 'candidato';
+  for (const p of e.produtos as unknown[])
+    if (!objeto(p) || typeof p.nome !== 'string' || typeof p.tipo !== 'string' || !(p.tipo in TIPOS)
+      || !Array.isArray(p.funcionalidades) || !numero(p.qualidade) || !numero(p.vendasMes)
+      || !numero(p.receitaTotal) || !numero(p.lancadoEm)) return 'produto';
+  for (const m of e.mensagens as unknown[])
+    if (!objeto(m) || !numero(m.minuto) || typeof m.texto !== 'string') return 'mensagem';
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Ciclo principal
 // ---------------------------------------------------------------------------
 

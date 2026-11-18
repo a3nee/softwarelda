@@ -21,7 +21,7 @@ do Node (≥ 22.18) para correr TypeScript.
 - `src/sim.ts` — toda a lógica de jogo (tempo, economia, funcionários, construção). **Não importa Three.js**
   nem o DOM, para poder ser testada em Node.
 - `src/main.ts` — cena 3D, ferramentas de construção, interface (HTML por cima do canvas).
-- `src/simrun.ts` — testes da lógica (caminhos, salas, tipos, dependências, mercado), sem 3D.
+- `src/simrun.ts` — testes da lógica (caminhos, salas, tipos, dependências, mercado, equipas, guardar/carregar), sem 3D.
 - `src/simtest.ts` — equilíbrio da economia: jogadores automáticos durante 2 anos, com 8 sementes, e metas a cumprir.
 
 ## Controlos
@@ -34,6 +34,17 @@ do Node (≥ 22.18) para correr TypeScript.
 - **Secretária** (500 €): clica numa célula.
 - **Demolir**: clica numa parede, porta ou secretária, ou arrasta para demolir um troço de parede. Sem reembolso.
 - Painel da direita: projetos em curso, novo projeto (tipo, funcionalidades, equipa), equipa, candidatos, produtos e mercados.
+
+## Guardar e carregar
+
+- **Guardar** (barra de cima) guarda o jogo neste browser (`localStorage`, chave `software-lda.save`).
+- **Autosave** no fecho de cada mês (`software-lda.autosave`), exceto depois de uma falência, para não
+  apagar o último jogo bom.
+- **Carregar** e o arranque da página usam o mais recente dos dois. Um jogo novo passa logo a ser o mais recente.
+- O save é o `Estado` em JSON com uma versão (`VERSAO_SAVE`). `importarJogo` em `sim.ts` valida tudo
+  (campos, tamanhos das paredes, ids de projetos e secretárias referidos pelos funcionários…) e recusa um save
+  corrompido com uma mensagem, em vez de o deixar estragar o jogo. Como o gerador aleatório vive no estado, um jogo
+  carregado continua exatamente como o original continuaria (há um teste para isso).
 
 ## Movimento dos funcionários
 

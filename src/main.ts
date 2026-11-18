@@ -8,10 +8,63 @@ import {
   contratar, demolirArestas, despedir, detetarSalas, ECON, euros, fatorMercado, iniciarProjeto,
   lerAresta, LISTA_TIPOS, minutoDoDia, NADA, NOME_ESTADO, novoJogo, PORTA, removerSecretaria,
   secretariaEm, segmento, semDependentes, textoData, tipoDisponivel, TIPOS, trabalhoDoProjeto,
+  exportarJogo, importarJogo, mensagem, mesDeJogo,
   vendasIniciais, type Aresta, type Estado, type Funcionario, type Resultado, type TipoSoftware,
 } from './sim.ts';
 
-const s: Estado = novoJogo(Date.now() & 0xffff);
+// ---------------------------------------------------------------------------
+// Jogos guardados (localStorage): um lugar manual e um autosave no fecho de cada mês
+// ---------------------------------------------------------------------------
+
+const LUGAR_MANUAL = 'software-lda.save';
+const LUGAR_AUTO = 'software-lda.autosave';
+const LARGURA = 24;
+const ALTURA = 18;
+
+function lerLugar(chave: string): ReturnType<typeof importarJogo> | null {
+  let texto: string | null = null;
+  try {
+    texto = localStorage.getItem(chave);
+  } catch {
+    return null;
+  }
+  if (texto === null) return null;
+  const r = importarJogo(texto);
+  if (r.ok && (r.estado.largura !== LARGURA || r.estado.altura !== ALTURA))
+    return { ok: false, msg: 'Jogo guardado com outro tamanho de terreno.' };
+  return r;
+}
+
+function escreverLugar(chave: string, jogo: Estado): boolean {
+  try {
+    localStorage.setItem(chave, exportarJogo(jogo));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** No arranque continua o jogo guardado mais recente (manual ou autosave). */
+function jogoInicial(): Estado {
+  const lugares = [lerLugar(LUGAR_MANUAL), lerLugar(LUGAR_AUTO)];
+  let melhor: { estado: Estado; guardadoEm: number } | null = null;
+  let erro = '';
+  for (const r of lugares) {
+    if (!r) continue;
+    if (!r.ok) erro = r.msg;
+    else if (!melhor || r.guardadoEm > melhor.guardadoEm) melhor = r;
+  }
+  if (melhor) {
+    mensagem(melhor.estado, 'Jogo carregado: continuas onde ficaste.');
+    return melhor.estado;
+  }
+  const novo = novoJogo(Date.now() & 0xffff, LARGURA, ALTURA);
+  if (erro) mensagem(novo, `⚠ Não foi possível carregar o jogo guardado. ${erro}`);
+  return novo;
+}
+
+let s: Estado = jogoInicial();
+let mesGuardado = mesDeJogo(s);
 
 // ---------------------------------------------------------------------------
 // Cena
@@ -431,6 +484,12 @@ const topo = el(`<div id="topo" class="ui painel">
     <button data-vel="2">▶▶</button>
     <button data-vel="3">▶▶▶</button>
   </span>
+  <span class="jogo">
+    <span class="sub guardado"></span>
+    <button data-jogo="guardar" title="Guarda neste browser. Há também um autosave no fecho de cada mês.">Guardar</button>
+    <button data-jogo="carregar" title="Volta ao último jogo guardado (manual ou autosave)">Carregar</button>
+    <button data-jogo="novo">Novo jogo</button>
+  </span>
 </div>`);
 const ferramentas = el(`<div id="ferramentas" class="ui painel">${FERRAMENTAS.map(
   (f) => `<button data-ferr="${f.id}" title="Tecla ${f.tecla}">${f.nome}</button>`,
@@ -443,7 +502,8 @@ const lateral = el(`<div id="lateral" class="ui">
   <div class="painel" id="p-produtos"></div>
 </div>`);
 const caixaMensagens = el(`<div id="mensagens" class="ui painel"></div>`);
-const fim = el(`<div id="fim" class="ui"><div class="painel">Falência! A Software Lda. fechou portas.</div></div>`);
+const fim = el(`<div id="fim" class="ui"><div class="painel">Falência! A Software Lda. fechou portas.
+  <div class="linha"><button data-jogo="carregar">Carregar jogo guardado</button><button data-jogo="novo">Novo jogo</button></div></div></div>`);
 
 const VELOCIDADES = [0, 24, 72, 200]; // minutos de jogo por segundo real
 let velocidade = 1;
@@ -452,6 +512,65 @@ topo.addEventListener('click', (ev) => {
   const b = (ev.target as HTMLElement).closest('button');
   if (b?.dataset.vel) velocidade = Number(b.dataset.vel);
 });
+for (const e of [topo, fim])
+  e.addEventListener('click', (ev) => {
+    const b = (ev.target as HTMLElement).closest('button');
+    const a = b?.dataset.jogo;
+    if (a === 'guardar') guardar();
+    else if (a === 'carregar') carregar();
+    else if (a === 'novo' && (s.falencia || confirm('Começar um jogo novo? O jogo atual perde-se se não o guardares.'))) {
+      usarEstado(novoJogo(Date.now() & 0xffff, LARGURA, ALTURA));
+      // Passa a ser o jogo mais recente: ao recarregar a página continua este, não o antigo.
+      escreverLugar(LUGAR_AUTO, s);
+    }
+    atualizarUI();
+  });
+
+let textoGuardado = '';
+function guardar(): void {
+  if (escreverLugar(LUGAR_MANUAL, s)) {
+    textoGuardado = `Guardado: ${textoData(s.minuto).split(' — ')[0]}`;
+    mensagem(s, 'Jogo guardado.');
+  } else aviso('Não foi possível guardar (o armazenamento do browser está cheio ou bloqueado).');
+}
+
+/** Carrega o mais recente entre o save manual e o autosave. */
+function carregar(): void {
+  let melhor: { estado: Estado; guardadoEm: number } | null = null;
+  let erro = 'Não há nenhum jogo guardado.';
+  for (const r of [lerLugar(LUGAR_MANUAL), lerLugar(LUGAR_AUTO)]) {
+    if (!r) continue;
+    if (!r.ok) erro = r.msg;
+    else if (!melhor || r.guardadoEm > melhor.guardadoEm) melhor = r;
+  }
+  if (!melhor) return aviso(erro);
+  mensagem(melhor.estado, 'Jogo carregado.');
+  usarEstado(melhor.estado);
+}
+
+/** Troca o jogo em curso; a cena e as escolhas da interface voltam a ser construídas a partir dele. */
+function usarEstado(novo: Estado): void {
+  s = novo;
+  mesGuardado = mesDeJogo(s);
+  versaoDesenhada = -1;
+  tipoEscolhido = 'utilitario';
+  funcEscolhidas = [];
+  marcacoes.clear();
+  textoGuardado = '';
+  arrasto = null;
+  fantasma.clear();
+  textoArrasto = '';
+  if (import.meta.env.DEV) Object.assign(window, { __jogo: s });
+}
+
+/** Autosave no fecho de cada mês (não guarda uma falência por cima do último jogo bom). */
+function autosave(): void {
+  const mes = mesDeJogo(s);
+  if (mes === mesGuardado) return;
+  mesGuardado = mes;
+  if (s.falencia) return;
+  if (escreverLugar(LUGAR_AUTO, s)) textoGuardado = `Autosave: ${textoData(s.minuto).split(' — ')[0]}`;
+}
 ferramentas.addEventListener('click', (ev) => {
   const b = (ev.target as HTMLElement).closest('button');
   if (b?.dataset.ferr) {
@@ -555,6 +674,7 @@ function atualizarUI(): void {
   ferramentas.querySelectorAll<HTMLButtonElement>('[data-ferr]').forEach((b) =>
     b.classList.toggle('ativo', b.dataset.ferr === ferramenta));
   definir(dica, textoArrasto || FERRAMENTAS.find((f) => f.id === ferramenta)!.dica);
+  (topo.querySelector('.guardado') as HTMLElement).textContent = textoGuardado;
   (topo.querySelector('.salas') as HTMLElement).textContent = totalSalas === 1 ? '1 sala' : `${totalSalas} salas`;
 
   const pProjeto = document.getElementById('p-projeto')!;
@@ -686,6 +806,7 @@ function ciclo(agora: number): void {
   const minutos = Math.floor(acumulado);
   acumulado -= minutos;
   if (minutos > 0) avancar(s, minutos);
+  autosave();
 
   sincronizarMapa();
   sincronizarFuncionarios();

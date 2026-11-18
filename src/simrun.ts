@@ -5,6 +5,7 @@ import {
   novoJogo, segmento, semDependentes, TIPOS, trabalhoDoProjeto, validarFuncionalidades, valorDoProjeto,
   vendasIniciais, AREAS, totalDaArea, areaDeTrabalho, estimarProjeto,
   cancelarProjeto, definirEquipa, despedir, eficienciaEquipa, membrosDe, semProjeto,
+  exportarJogo, importarJogo, mesDeJogo, MIN_POR_MES, VERSAO_SAVE,
   type Estado, type TipoSoftware, type Trabalhador,
 } from './sim.ts';
 
@@ -243,6 +244,60 @@ verificar(cenarioSala(false) === 'semAcesso', 'sem porta fica sem acesso');
   for (const ar of AREAS) pa.feito[ar] = totalDaArea(pa, ar);
   avancar(s, 1);
   verificar(s.projetos.length === 0 && semProjeto(s).length === 2, 'ao lançar, a equipa fica livre');
+}
+
+// ---------------------------------------------------------------------------
+// Guardar e carregar
+// ---------------------------------------------------------------------------
+{
+  // Um jogo a meio: paredes, porta, secretárias, equipa, projeto em curso e produto lançado.
+  const s = novoJogo(21);
+  caixa(s, 2, 2, 8, 8);
+  colocarPorta(s, { tipo: 'v', x: 2, z: 4 });
+  for (let i = 0; i < 3; i++) colocarSecretaria(s, 3 + i, 4);
+  contratar(s, 0);
+  contratar(s, 0);
+  contratar(s, 0);
+  iniciarProjeto(s, 'Primeiro', 'utilitario');
+  avancar(s, 2 * MIN_POR_MES + 777);
+  iniciarProjeto(s, 'Segundo', 'utilitario');
+  avancar(s, 5 * MIN_POR_DIA + 600); // a meio de um dia de trabalho, com gente a andar
+  verificar(s.produtos.length > 0 && s.projetos.length > 0, 'o jogo de teste tem produtos e um projeto em curso');
+
+  const bom = exportarJogo(s);
+  const r = importarJogo(bom);
+  verificar(r.ok, 'um save acabado de exportar carrega');
+  if (!r.ok) throw new Error(r.msg);
+  const c = r.estado;
+  verificar(JSON.stringify(c) === JSON.stringify(s), 'o estado carregado é igual ao guardado');
+  verificar(c !== s && c.funcionarios[0] !== s.funcionarios[0], 'o estado carregado é uma cópia independente');
+
+  // Determinismo: o jogo carregado continua exatamente como o original continuaria.
+  avancar(s, 3 * MIN_POR_MES);
+  avancar(c, 3 * MIN_POR_MES);
+  verificar(JSON.stringify(c) === JSON.stringify(s), 'depois de carregar, o jogo segue igual ao original (3 meses depois)');
+  verificar(mesDeJogo(s) === Math.floor(s.minuto / MIN_POR_MES), 'mesDeJogo conta os fechos de mês');
+
+  // Saves maus são recusados com uma mensagem, nunca com uma exceção.
+  const estragar = (f: (o: any) => void) => {
+    const o = JSON.parse(bom);
+    f(o);
+    return importarJogo(JSON.stringify(o));
+  };
+  verificar(!importarJogo('{isto não é json').ok, 'JSON inválido é recusado');
+  verificar(!importarJogo('[]').ok && !importarJogo('null').ok, 'algo que não é um save é recusado');
+  verificar(!estragar((o) => { o.versao = VERSAO_SAVE + 1; }).ok, 'save de uma versão mais recente é recusado');
+  verificar(!estragar((o) => { delete o.estado.dinheiro; }).ok, 'falta de um campo é recusada');
+  verificar(!estragar((o) => { o.estado.paredesV.pop(); }).ok, 'paredes com o tamanho errado são recusadas');
+  verificar(!estragar((o) => { o.estado.paredesH[0] = 7; }).ok, 'valor de aresta desconhecido é recusado');
+  verificar(!estragar((o) => { o.estado.funcionarios[0].projetoId = 9999; }).ok, 'funcionário num projeto inexistente é recusado');
+  verificar(!estragar((o) => { o.estado.funcionarios[0].secretariaId = 9999; }).ok, 'secretária inexistente é recusada');
+  verificar(!estragar((o) => { o.estado.projetos[0].tipo = 'xadrez'; }).ok, 'tipo de software desconhecido é recusado');
+  verificar(!estragar((o) => { o.estado.projetos.push({ ...o.estado.projetos[0] }); }).ok, 'ids repetidos são recusados');
+  verificar(!estragar((o) => { o.estado.funcionarios[0].estado = 'aDormir'; }).ok, 'estado de funcionário desconhecido é recusado');
+  verificar(!estragar((o) => { o.estado.dinheiro = 'muito'; }).ok, 'número que não é número é recusado');
+  const msg = estragar((o) => { o.estado.paredesV.pop(); });
+  verificar(!msg.ok && msg.msg.includes('paredes'), 'a mensagem diz o que está mal');
 }
 
 console.log(`Testes: ${testes} OK`);
