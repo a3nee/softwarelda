@@ -10,7 +10,13 @@ import {
   secretariaEm, segmento, semDependentes, textoData, tipoDisponivel, TIPOS, trabalhoDoProjeto,
   exportarJogo, importarJogo, mensagem, mesDeJogo,
   vendasIniciais, type Aresta, type Estado, type Funcionario, type Resultado, type TipoSoftware,
+  objetoEm, removerObjeto, type Mensagem, type TipoObjeto,
 } from './sim.ts';
+import {
+  animarBoneco, Confetes, corFelicidade, criarBoneco, criarCafe, criarMatraquilhos, criarPlanta, criarSecretaria,
+  criarSofa, MAT, mat, type Boneco,
+} from './modelos.ts';
+import { Ambiente } from './ambiente.ts';
 
 // ---------------------------------------------------------------------------
 // Jogos guardados (localStorage): um lugar manual e um autosave no fecho de cada mês
@@ -73,11 +79,14 @@ let mesGuardado = mesDeJogo(s);
 const app = document.getElementById('app')!;
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
 renderer.setSize(innerWidth, innerHeight);
 app.appendChild(renderer.domElement);
 
 const cena = new THREE.Scene();
-cena.background = new THREE.Color(0x1d2230);
 
 const camara = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 500);
 // Centro ligeiramente à direita para o painel lateral não tapar o terreno.
@@ -90,32 +99,35 @@ controlos.mouseButtons = { LEFT: null, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOU
 controlos.maxPolarAngle = Math.PI * 0.45;
 controlos.minDistance = 6;
 controlos.maxDistance = 70;
+controlos.enableDamping = true;
+controlos.dampingFactor = 0.12;
 controlos.update();
 
-cena.add(new THREE.HemisphereLight(0xdde6ff, 0x404050, 1.6));
-const sol = new THREE.DirectionalLight(0xffffff, 1.4);
-sol.position.set(10, 25, 8);
-cena.add(sol);
+const ambiente = new Ambiente(cena, s.largura, s.altura, s.entrada);
+const confetes = new Confetes(cena);
 
 // Chão: uma instância por célula, para se poder colorir cada uma.
 const geoCelula = new THREE.PlaneGeometry(0.98, 0.98).rotateX(-Math.PI / 2);
 const chao = new THREE.InstancedMesh(
   geoCelula,
-  new THREE.MeshLambertMaterial({ color: 0xffffff }),
+  new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85 }),
   s.largura * s.altura,
 );
+chao.receiveShadow = true;
 {
   const m = new THREE.Matrix4();
   for (let z = 0; z < s.altura; z++)
     for (let x = 0; x < s.largura; x++) {
       m.makeTranslation(x, 0, z);
       chao.setMatrixAt(z * s.largura + x, m);
-      chao.setColorAt(z * s.largura + x, new THREE.Color(0x8a8f9e));
+      chao.setColorAt(z * s.largura + x, new THREE.Color(0xe4dfd5));
     }
 }
 cena.add(chao);
 
-const COR_ABERTO = new THREE.Color(0x8a8f9e);
+const COR_ABERTO = new THREE.Color(0xe4dfd5);
+// Alcatifas das salas: cores vivas, mas não berrantes
+const CORES_SALA = [0x7dd3fc, 0xf9a8d4, 0x86efac, 0xfde68a, 0xc4b5fd, 0xfdba74, 0x5eead4, 0xfca5a5].map((c) => new THREE.Color(c));
 let totalSalas = 0;
 
 /** Pinta o chão: cada sala fechada tem a sua cor, o espaço aberto fica cinzento. */
@@ -125,18 +137,21 @@ function pintarChao(): void {
   const cor = new THREE.Color();
   salas.sala.forEach((n, i) => {
     if (n < 0) cor.copy(COR_ABERTO);
-    else cor.setHSL((0.08 + n * 0.17) % 1, 0.3, 0.6);
+    else cor.copy(CORES_SALA[n % CORES_SALA.length]);
+    // Ligeiro xadrez, para o chão não parecer liso
+    if ((i + Math.floor(i / s.largura)) % 2) cor.offsetHSL(0, 0, -0.025);
     chao.setColorAt(i, cor);
   });
   chao.instanceColor!.needsUpdate = true;
 }
 
-// Marca da entrada
+// Marca da entrada: tapete verde do lado de dentro
 const entrada = new THREE.Mesh(
-  new THREE.PlaneGeometry(0.9, 0.9).rotateX(-Math.PI / 2),
-  new THREE.MeshBasicMaterial({ color: 0x5bd67a }),
+  new THREE.BoxGeometry(0.8, 0.02, 0.8),
+  mat(0x16a34a, { roughness: 1 }),
 );
 entrada.position.set(s.entrada.x, 0.01, s.entrada.z);
+entrada.receiveShadow = true;
 cena.add(entrada);
 
 // Cursores: célula, vértice (início de parede) e aresta (porta / demolir)
@@ -165,31 +180,14 @@ cursor.visible = cursorVertice.visible = cursorAresta.visible = false;
 
 const grupoMapa = new THREE.Group();
 cena.add(grupoMapa);
-const matTampo = new THREE.MeshLambertMaterial({ color: 0xb98b5e });
-const matMonitor = new THREE.MeshLambertMaterial({ color: 0x22252e });
-const matCadeira = new THREE.MeshLambertMaterial({ color: 0x3a5bd6 });
-const geoTampo = new THREE.BoxGeometry(0.9, 0.06, 0.55);
-const geoPerna = new THREE.BoxGeometry(0.06, 0.45, 0.06);
-const geoMonitor = new THREE.BoxGeometry(0.4, 0.26, 0.04);
-const geoCadeira = new THREE.BoxGeometry(0.35, 0.3, 0.35);
+/** Ecrã de cada secretária (por id), para acender quando alguém está a trabalhar. */
+const ecras = new Map<number, THREE.Mesh>();
 
-function criarSecretaria(): THREE.Group {
-  const g = new THREE.Group();
-  const tampo = new THREE.Mesh(geoTampo, matTampo);
-  tampo.position.set(0, 0.48, -0.15);
-  g.add(tampo);
-  for (const [px, pz] of [[-0.4, -0.38], [0.4, -0.38], [-0.4, 0.08], [0.4, 0.08]]) {
-    const p = new THREE.Mesh(geoPerna, matTampo);
-    p.position.set(px, 0.225, pz);
-    g.add(p);
-  }
-  const mon = new THREE.Mesh(geoMonitor, matMonitor);
-  mon.position.set(0, 0.66, -0.32);
-  g.add(mon);
-  const cad = new THREE.Mesh(geoCadeira, matCadeira);
-  cad.position.set(0, 0.15, 0.25);
-  g.add(cad);
-  return g;
+function criarObjeto(tipo: TipoObjeto, id: number): THREE.Group {
+  if (tipo === 'planta') return criarPlanta(id);
+  if (tipo === 'sofa') return criarSofa(id);
+  if (tipo === 'cafe') return criarCafe();
+  return criarMatraquilhos();
 }
 
 // Paredes e portas
@@ -199,9 +197,11 @@ const geoParede = new THREE.BoxGeometry(1 + ESPESSURA, ALTURA_PAREDE, ESPESSURA)
 const geoOmbreira = new THREE.BoxGeometry(0.1, ALTURA_PAREDE, ESPESSURA + 0.04);
 const geoVerga = new THREE.BoxGeometry(1, 0.16, ESPESSURA);
 const geoFolha = new THREE.BoxGeometry(0.8, ALTURA_PAREDE - 0.2, 0.04);
-const matParede = new THREE.MeshLambertMaterial({ color: 0xe9e4da });
-const matOmbreira = new THREE.MeshLambertMaterial({ color: 0x6b4a2e });
-const matFolha = new THREE.MeshLambertMaterial({ color: 0xa8774a, transparent: true, opacity: 0.55 });
+const matParede = mat(0xf7f4ee, { roughness: 0.7 });
+const matTopoParede = mat(0x475069, { roughness: 0.6 });
+const geoTopoParede = new THREE.BoxGeometry(1 + ESPESSURA, 0.04, ESPESSURA + 0.02);
+const matOmbreira = MAT.madeiraEscura;
+const matFolha = mat(0x7dd3fc, { transparent: true, opacity: 0.35, roughness: 0.1, metalness: 0.1 });
 const matFantasma = new THREE.MeshBasicMaterial({ color: 0x6fd68b, transparent: true, opacity: 0.45 });
 const matFantasmaMau = new THREE.MeshBasicMaterial({ color: 0xff6b6b, transparent: true, opacity: 0.45 });
 
@@ -229,6 +229,7 @@ function criarPorta(): THREE.Group {
   const folha = new THREE.Mesh(geoFolha, matFolha);
   folha.position.y = (ALTURA_PAREDE - 0.2) / 2;
   g.add(folha);
+  g.traverse((o) => { if (o !== folha) o.castShadow = o.receiveShadow = true; });
   return g;
 }
 
@@ -245,9 +246,16 @@ function sincronizarMapa(): void {
   if (versaoDesenhada === s.versaoMapa) return;
   versaoDesenhada = s.versaoMapa;
   grupoMapa.clear();
+  ecras.clear();
   for (const d of s.secretarias) {
-    const g = criarSecretaria();
-    g.position.set(d.x, 0, d.z);
+    const m = criarSecretaria(d.id);
+    m.grupo.position.set(d.x, 0, d.z);
+    grupoMapa.add(m.grupo);
+    ecras.set(d.id, m.ecra);
+  }
+  for (const o of s.objetos) {
+    const g = criarObjeto(o.tipo, o.id);
+    g.position.set(o.x, 0, o.z);
     grupoMapa.add(g);
   }
   for (const a of ARESTAS) {
@@ -259,8 +267,12 @@ function sincronizarMapa(): void {
       grupoMapa.add(p);
     } else {
       const m = new THREE.Mesh(geoParede, matParede);
+      m.castShadow = m.receiveShadow = true;
       colocarNaAresta(m, a, ALTURA_PAREDE / 2);
       grupoMapa.add(m);
+      const topo = new THREE.Mesh(geoTopoParede, matTopoParede);
+      colocarNaAresta(topo, a, ALTURA_PAREDE + 0.02);
+      grupoMapa.add(topo);
     }
   }
   pintarChao();
@@ -289,44 +301,91 @@ let textoArrasto = '';
 // Funcionários
 // ---------------------------------------------------------------------------
 
-const geoCorpo = new THREE.CylinderGeometry(0.16, 0.2, 0.55, 12);
-const geoCabeca = new THREE.SphereGeometry(0.14, 16, 12);
-const matPele = new THREE.MeshLambertMaterial({ color: 0xf0c8a0 });
-const bonecos = new Map<number, THREE.Group>();
+const bonecos = new Map<number, Boneco>();
+let mostrarIndicadores = true;
 
-function criarBoneco(f: Funcionario): THREE.Group {
-  const g = new THREE.Group();
-  const cor = new THREE.Color().setHSL((f.id * 0.137) % 1, 0.55, 0.5);
-  const corpo = new THREE.Mesh(geoCorpo, new THREE.MeshLambertMaterial({ color: cor }));
-  corpo.position.y = 0.3;
-  g.add(corpo);
-  const cabeca = new THREE.Mesh(geoCabeca, matPele);
-  cabeca.position.y = 0.7;
-  g.add(cabeca);
-  cena.add(g);
-  return g;
+function especialidade(f: Funcionario): Area {
+  return AREAS.reduce((m, a) => (f.competencias[a] > f.competencias[m] ? a : m), AREAS[0]);
 }
 
-function sincronizarFuncionarios(): void {
+/** Acompanha o estado: a posição é suavizada, a pose e a direção vêm do que cada um está a fazer. */
+function sincronizarFuncionarios(dt: number, agora: number): void {
   const vivos = new Set<number>();
+  const md = minutoDoDia(s);
+  const horario = md >= 9 * 60 && md < 17 * 60;
+  for (const m of ecras.values()) m.material = MAT.ecraDesligado;
   for (const f of s.funcionarios) {
     vivos.add(f.id);
-    let g = bonecos.get(f.id);
-    if (!g) {
-      g = criarBoneco(f);
-      bonecos.set(f.id, g);
+    let b = bonecos.get(f.id);
+    if (!b) {
+      b = criarBoneco(f.id, especialidade(f));
+      b.grupo.position.set(f.x, 0, f.z);
+      cena.add(b.grupo);
+      bonecos.set(f.id, b);
     }
-    g.visible = f.dentro;
-    // A trabalhar: senta-se na cadeira (ligeiramente à frente da secretária).
+    const g = b.grupo;
+    if (!f.dentro) {
+      g.visible = false;
+      g.position.set(f.x, 0, f.z);
+      continue;
+    }
+    const acabouDeEntrar = !g.visible;
+    g.visible = true;
     const sentado = f.estado === 'aTrabalhar';
-    g.position.set(f.x, sentado ? 0.05 : 0, f.z + (sentado ? 0.25 : 0));
+    const alvoX = f.x;
+    const alvoZ = f.z + (sentado ? 0.34 : 0);
+    if (acabouDeEntrar) g.position.set(alvoX, 0, alvoZ);
+    const dx = alvoX - g.position.x;
+    const dz = alvoZ - g.position.z;
+    const k = Math.min(1, dt * 14);
+    g.position.x += dx * k;
+    g.position.z += dz * k;
+    const aAndar = Math.hypot(dx, dz) > 0.02 && !sentado;
+    // Virado para onde anda; sentado, virado para o ecrã (−z).
+    const rumo = sentado ? Math.PI : aAndar ? Math.atan2(dx, dz) : g.rotation.y;
+    let d = rumo - g.rotation.y;
+    d = Math.atan2(Math.sin(d), Math.cos(d));
+    g.rotation.y += d * Math.min(1, dt * 12);
+    animarBoneco(b, sentado ? 'sentado' : aAndar || f.estado === 'aCaminho' || f.estado === 'aSair' ? 'andar' : 'parado', agora / 1000 + f.id);
+    // Indicador de felicidade por cima da cabeça
+    b.indicador.visible = mostrarIndicadores;
+    b.indicador.position.y = 1.12 + Math.sin(agora / 400 + f.id) * 0.03;
+    b.indicador.rotation.y = agora / 700 + f.id;
+    const mi = b.indicador.material as THREE.MeshStandardMaterial;
+    corFelicidade(f.felicidade, mi.color);
+    mi.emissive.copy(mi.color);
+    // Ecrã aceso de quem está a trabalhar (cor conforme a especialidade)
+    if (sentado && horario && f.secretariaId !== null) {
+      const e = ecras.get(f.secretariaId);
+      const area = especialidade(f);
+      if (e) e.material = area === 'programacao' ? MAT.ecraCodigo : area === 'design' ? MAT.ecraDesign : MAT.ecraLigado;
+    }
   }
-  for (const [id, g] of bonecos)
+  for (const [id, b] of bonecos)
     if (!vivos.has(id)) {
-      cena.remove(g);
+      cena.remove(b.grupo);
       bonecos.delete(id);
     }
 }
+
+// Avisos que pedem efeitos (confetes nos lançamentos)
+const vistas = new WeakSet<Mensagem>();
+function marcarMensagensVistas(): void {
+  for (const m of s.mensagens) vistas.add(m);
+}
+function processarMensagensNovas(): void {
+  for (const m of s.mensagens) {
+    if (vistas.has(m)) continue;
+    vistas.add(m);
+    if (m.tipo === 'lancamento' || m.tipo === 'conquista') {
+      const c = new THREE.Vector3();
+      const ds = s.secretarias.length ? s.secretarias : [{ x: s.largura / 2, z: s.altura / 2 }];
+      for (const d of ds) c.add(new THREE.Vector3(d.x, 0, d.z));
+      confetes.disparar(c.divideScalar(ds.length));
+    }
+  }
+}
+marcarMensagensVistas();
 
 // ---------------------------------------------------------------------------
 // Ferramentas e rato
@@ -391,7 +450,7 @@ function atualizarCursores(p: THREE.Vector3 | null): void {
       return;
     }
   }
-  if ((ferramenta === 'secretaria' || (ferramenta === 'demolir' && secretariaEm(s, x, z))) && naGrelha) {
+  if ((ferramenta === 'secretaria' || (ferramenta === 'demolir' && (secretariaEm(s, x, z) || objetoEm(s, x, z)))) && naGrelha) {
     cursor.visible = true;
     cursor.position.set(x, 0.02, z);
   }
@@ -438,7 +497,9 @@ renderer.domElement.addEventListener('pointerup', (ev) => {
     const v = verticeDe(p);
     if (v.x === inicio.x && v.z === inicio.z) {
       const a = arestaDe(p);
-      r = a ? demolirArestas(s, [a]) : removerSecretaria(s, Math.round(p.x), Math.round(p.z));
+      const cx = Math.round(p.x);
+      const cz = Math.round(p.z);
+      r = a ? demolirArestas(s, [a]) : objetoEm(s, cx, cz) ? removerObjeto(s, cx, cz) : removerSecretaria(s, cx, cz);
     }
   }
   if (!r.ok && r.msg) aviso(r.msg);
@@ -560,6 +621,7 @@ function usarEstado(novo: Estado): void {
   arrasto = null;
   fantasma.clear();
   textoArrasto = '';
+  marcarMensagensVistas();
   if (import.meta.env.DEV) Object.assign(window, { __jogo: s });
 }
 
@@ -809,7 +871,10 @@ function ciclo(agora: number): void {
   autosave();
 
   sincronizarMapa();
-  sincronizarFuncionarios();
+  sincronizarFuncionarios(dt, agora);
+  processarMensagensNovas();
+  ambiente.atualizar(dt, minutoDoDia(s) + acumulado, true);
+  confetes.atualizar(dt);
   if (agora - ultimaUI > 150) {
     atualizarUI();
     ultimaUI = agora;
@@ -824,6 +889,8 @@ requestAnimationFrame(ciclo);
 if (import.meta.env.DEV) {
   Object.assign(window, {
     __jogo: s,
+    __camara: camara,
+    __controlos: controlos,
     __ecra: (vx: number, vz: number) => {
       const v = new THREE.Vector3(vx - 0.5, 0, vz - 0.5).project(camara);
       return [Math.round((v.x + 1) / 2 * innerWidth), Math.round((1 - v.y) / 2 * innerHeight)];
