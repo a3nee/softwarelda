@@ -20,20 +20,55 @@ do Node (≥ 22.18) para correr TypeScript.
 
 - `src/sim.ts` — toda a lógica de jogo (tempo, economia, funcionários, construção). **Não importa Three.js**
   nem o DOM, para poder ser testada em Node.
-- `src/main.ts` — cena 3D, ferramentas de construção, interface (HTML por cima do canvas).
-- `src/simrun.ts` — testes da lógica (caminhos, salas, tipos, dependências, mercado, equipas, guardar/carregar), sem 3D.
+- `src/main.ts` — liga tudo: cena 3D, ferramentas de construção, HUD, painel lateral, avisos, ficha e ciclo.
+- `src/modelos.ts` — modelos 3D (secretárias, decoração, bonecos animados, confetes). Só Three.js.
+- `src/ambiente.ts` — céu com ciclo dia/noite, sol com sombras, relva, estrada com carros, árvores, prédios, nuvens.
+- `src/menus.ts` — menus em ecrã inteiro: principal, nova empresa, pausa, definições, como jogar, conquistas.
+- `src/definicoes.ts` — definições do jogador (`localStorage`, chave `software-lda.definicoes`).
+- `src/som.ts` — efeitos sonoros sintetizados com WebAudio (sem ficheiros de som).
+- `src/grafico.ts` — gráfico das estatísticas (canvas 2D).
+- `src/simrun.ts` — testes da lógica (caminhos, salas, tipos, dependências, mercado, equipas, guardar/carregar,
+  decoração, conquistas, eventos), sem 3D.
 - `src/simtest.ts` — equilíbrio da economia: jogadores automáticos durante 2 anos, com 8 sementes, e metas a cumprir.
+
+## Menus e interface
+
+- **Menu principal**: Continuar (o jogo guardado mais recente), Novo jogo, Como jogar, Conquistas, Definições.
+  Por trás corre um escritório de montra (`criarMontra` em `main.ts`), que nunca é guardado.
+- **Novo jogo**: nome da empresa, dificuldade (Fácil 50 000 €, Normal 25 000 €, Difícil 12 000 €) e eventos aleatórios.
+- **Pausa** (**Esc** ou ☰): continuar, guardar, carregar, como jogar, conquistas, definições, sair (com autosave).
+- **Definições**: qualidade (resolução), sombras, ciclo dia/noite, indicadores de felicidade, sons, volume, avisos.
+- **Barra de cima**: dinheiro (anima até ao valor certo e mostra o saldo do mês que fechou), saldo previsto
+  (vendas − salários − renda), equipa, felicidade média, data e hora (☀️/🌙), velocidade, guardar e menu.
+- **Painel lateral** com separadores: Projetos (em curso + novo projeto), Equipa, Contratar, Produtos (mercado e
+  produtos com estrelas) e Números (gráfico de 24 meses, recordes, conquistas). Os números nos separadores
+  avisam de projetos, candidatos e pessoas com problemas.
+- **Ficha do funcionário**: clica no boneco (ou no cartão na Equipa, e a câmara vai até ele). Mostra estado,
+  projeto, felicidade, para onde tende (com o bónus da decoração) e o ritmo de trabalho.
+- **Avisos flutuantes** e sons em lançamentos, conquistas, eventos, desbloqueios e fechos de mês; confetes nos
+  lançamentos e conquistas. Erros das ações (dinheiro insuficiente, célula ocupada…) aparecem a vermelho.
+
+## Gráficos
+
+Sombras PCF do sol, tone mapping ACES, céu e luzes que mudam com a hora (candeeiros e janelas acendem à noite),
+alcatifas coloridas nas salas, secretárias com monitor que acende na cor da especialidade de quem trabalha
+(azul programação, rosa design, verde testes), bonecos com camisola da cor da especialidade que andam e se
+sentam a escrever, e um losango por cima da cabeça com a felicidade (verde ≥ 70, amarelo ≥ 40, vermelho).
 
 ## Controlos
 
-- **Botão direito** roda a câmara, **botão do meio** arrasta, **roda** faz zoom.
-- Teclas **1–5** escolhem a ferramenta, **Esc** volta a Selecionar, **Espaço** pausa.
+- **Botão direito** roda a câmara, **botão do meio** arrasta, **roda** faz zoom; **WASD**/setas movem, **Q/E** rodam.
+- Teclas **1–6** escolhem a ferramenta, **Esc** cancela / abre a pausa, **Espaço** pausa, **Ctrl+S** guarda.
 - **Parede** (100 € por segmento): arrasta entre dois cantos da grelha. Uma zona fechada por paredes passa a ser
   uma **sala** (o chão ganha cor). A parede exterior da entrada (quadrado verde) recebe sempre uma porta.
 - **Porta** (300 €): clica numa parede existente.
 - **Secretária** (500 €): clica numa célula.
-- **Demolir**: clica numa parede, porta ou secretária, ou arrasta para demolir um troço de parede. Sem reembolso.
-- Painel da direita: projetos em curso, novo projeto (tipo, funcionalidades, equipa), equipa, candidatos, produtos e mercados.
+- **Decoração**: planta (150 €, +3), sofá (600 €, +5), máquina de café (900 €, +8), matraquilhos (1 500 €, +10).
+  Ocupa uma célula e bloqueia a passagem. Sobe o alvo de felicidade (75) de quem trabalha na mesma sala; fora das
+  salas, de quem está a 5 células ou menos. Cada objeto repetido do mesmo tipo vale metade do anterior; máximo +25.
+  Mais felicidade = mais ritmo de trabalho (competência × (0,5 + felicidade/200)).
+- **Demolir**: clica numa parede, porta, secretária ou objeto, ou arrasta para demolir um troço de parede. Sem reembolso.
+- Secretárias e decoração mostram uma pré-visualização: verde se dá para colocar, vermelha se não.
 
 ## Guardar e carregar
 
@@ -41,19 +76,31 @@ do Node (≥ 22.18) para correr TypeScript.
 - **Autosave** no fecho de cada mês (`software-lda.autosave`), exceto depois de uma falência, para não
   apagar o último jogo bom.
 - **Carregar** e o arranque da página usam o mais recente dos dois. Um jogo novo passa logo a ser o mais recente.
-- O save é o `Estado` em JSON com uma versão (`VERSAO_SAVE`). `importarJogo` em `sim.ts` valida tudo
+- O save é o `Estado` em JSON com uma versão (`VERSAO_SAVE`, agora 2; os saves da versão 1 são migrados). `importarJogo` em `sim.ts` valida tudo
   (campos, tamanhos das paredes, ids de projetos e secretárias referidos pelos funcionários…) e recusa um save
   corrompido com uma mensagem, em vez de o deixar estragar o jogo. Como o gerador aleatório vive no estado, um jogo
   carregado continua exatamente como o original continuaria (há um teste para isso).
 
+## Conquistas e eventos
+
+- **15 conquistas** (`CONQUISTAS` em `sim.ts`): primeira contratação, primeiro produto, 5 e 10 funcionários,
+  3 salas, 5 objetos de decoração, bom ambiente, qualidade 90%, lançar um jogo, um de cada tipo, 20 000 € num mês,
+  100 000 € e 1 000 000 € em caixa, 1 e 5 anos. Ficam no estado (`s.conquistas`) e no save.
+- **Eventos aleatórios** (opção do jogo novo): no fecho de cada mês, 35% de hipótese de um evento entre os
+  possíveis — revista elogia um produto (+50% vendas), investidor (+6 000 € se houver pouco dinheiro), prémio,
+  feira de emprego (+2 candidatos), jantar de equipa (+10 felicidade), avaria, gripe, pirataria (−30% vendas),
+  inspeção das Finanças. Os cenários de equilíbrio correm **sem** eventos, por isso as metas não mudam.
+- **Histórico**: cada fecho de mês guarda receitas, despesas e caixa (`s.historico`), para o gráfico.
+
 ## Movimento dos funcionários
 
 Andam pela grelha com **A\*** (4 direções): as paredes bloqueiam, as portas deixam passar e as secretárias são
-obstáculos (menos a de destino). Quando o mapa muda, quem está a andar recalcula o caminho. Sem caminho, o
+obstáculos (menos a de destino), tal como a decoração. Quando o mapa muda, quem está a andar recalcula o caminho. Sem caminho, o
 funcionário fica **Sem acesso à secretária** (espera à entrada) ou **Preso** (vai para casa à meia-noite); as duas
 situações baixam a felicidade.
 
-Em `npm run dev` ficam disponíveis na consola `__jogo` (estado) e `__ecra(x, z)` (vértice da grelha → píxeis).
+Em `npm run dev` ficam disponíveis na consola `__jogo` (estado), `__camara`, `__controlos` e `__ecra(x, z)`
+(vértice da grelha → píxeis).
 
 ## Regras do jogo (atuais)
 
