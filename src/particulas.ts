@@ -53,7 +53,7 @@ interface Particula {
 export class Particulas {
   private readonly livres: THREE.Sprite[] = [];
   private readonly vivas: Particula[] = [];
-  private readonly grupo = new THREE.Group();
+  readonly grupo = new THREE.Group();
 
   constructor(cena: THREE.Scene, maximo = 160) {
     cena.add(this.grupo);

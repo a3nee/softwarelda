@@ -1,331 +1,500 @@
-// Ambiente à volta do escritório: céu com ciclo dia/noite, sol com sombras, relva, estrada com carros,
-// árvores, candeeiros, prédios ao fundo e nuvens. Só Three.js; a hora vem do jogo.
+// Ambiente à volta do escritório: céu físico (com nuvens) que ilumina a cena, sol com sombras e ciclo
+// dia/noite, relva, estrada com carros, candeeiros, árvores e prédios. Só Three.js; a hora vem do jogo.
 import * as THREE from 'three';
-import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { Sky } from 'three/addons/objects/Sky.js';
+import { Tree } from '@dgreenheck/ez-tree';
 import { hash, mat } from './modelos.ts';
-
-/** Momentos do dia (hora → cores e intensidades); entre dois momentos interpola-se. */
-const MOMENTOS: { h: number; ceu: number; sol: number; corSol: number; hemi: number; interior: number; luzes: number }[] = [
-  { h: 0, ceu: 0x0b1430, sol: 0.3, corSol: 0x8fa6ff, hemi: 0.42, interior: 0.55, luzes: 1 },
-  { h: 5, ceu: 0x1c2452, sol: 0.3, corSol: 0x8fa6ff, hemi: 0.45, interior: 0.55, luzes: 1 },
-  { h: 6.5, ceu: 0xf5a37a, sol: 1.0, corSol: 0xffb27a, hemi: 0.85, interior: 0.5, luzes: 0.4 },
-  { h: 8, ceu: 0x8fd0ff, sol: 2.6, corSol: 0xfff2dc, hemi: 1.15, interior: 0, luzes: 0 },
-  { h: 17, ceu: 0x8fd0ff, sol: 2.6, corSol: 0xfff2dc, hemi: 1.15, interior: 0, luzes: 0 },
-  { h: 18.7, ceu: 0xff8f6b, sol: 1.1, corSol: 0xff9d5c, hemi: 0.85, interior: 0.5, luzes: 0.6 },
-  { h: 20, ceu: 0x2e2a66, sol: 0.35, corSol: 0xa5b4fc, hemi: 0.5, interior: 0.55, luzes: 1 },
-  { h: 24, ceu: 0x0b1430, sol: 0.3, corSol: 0x8fa6ff, hemi: 0.42, interior: 0.55, luzes: 1 },
-];
+import { M, materialPBR, R, texturaNoMundo } from './recursos.ts';
+import type { Qualidade } from './definicoes.ts';
 
 const HORA_FIXA = 13; // sem ciclo dia/noite
-const COR_HEMI_DIA = new THREE.Color(0xdfeaff);
-const COR_HEMI_NOITE = new THREE.Color(0x5566bb);
+const COR_SOL_ALTO = new THREE.Color(0xfff4e6);
+const COR_SOL_BAIXO = new THREE.Color(0xff9a52);
+const COR_LUA = new THREE.Color(0x9fb4ff);
+const NEVOA_DIA = new THREE.Color(0xc4d6ea);
+const NEVOA_POR = new THREE.Color(0xe7b48e);
+const NEVOA_NOITE = new THREE.Color(0x0c1324);
+
+/** Muda as UV de uma caixa (medidas em unidades) para a textura ter `ladoTextura` metros, sem esticar. */
+function uvEmMetros(geo: THREE.BoxGeometry, w: number, h: number, d: number, ladoTextura: number): THREE.BoxGeometry {
+  const uv = geo.attributes.uv;
+  // Ordem das faces da BoxGeometry: +x, −x, +y, −y, +z, −z (4 vértices cada)
+  const tam = [[d, h], [d, h], [w, d], [w, d], [w, h], [w, h]];
+  for (let f = 0; f < 6; f++)
+    for (let k = 0; k < 4; k++) {
+      const i = f * 4 + k;
+      uv.setXY(i, (uv.getX(i) * tam[f][0]) / (ladoTextura * M), (uv.getY(i) * tam[f][1]) / (ladoTextura * M));
+    }
+  return geo;
+}
+
+/** Troca os materiais Phong da árvore por PBR (para a luz do céu os iluminar como ao resto). */
+function arvorePBR(t: Tree): void {
+  const ramos = t.branchesMesh.material as THREE.MeshPhongMaterial;
+  t.branchesMesh.material = new THREE.MeshStandardMaterial({
+    color: ramos.color, map: ramos.map, normalMap: ramos.normalMap, aoMap: ramos.aoMap,
+    roughnessMap: (ramos as unknown as { roughnessMap: THREE.Texture | null }).roughnessMap, roughness: 1,
+  });
+  const folhas = t.leavesMesh.material as THREE.MeshPhongMaterial;
+  const nova = new THREE.MeshStandardMaterial({
+    color: folhas.color, map: folhas.map, side: THREE.DoubleSide, alphaTest: folhas.alphaTest, roughness: 0.8,
+  });
+  const original = folhas.onBeforeCompile.bind(folhas);
+  nova.onBeforeCompile = (sh, r) => {
+    original(sh, r);
+    nova.userData.shader = sh;
+  };
+  t.leavesMesh.material = nova;
+}
 
 export class Ambiente {
   readonly sol: THREE.DirectionalLight;
   private readonly hemi: THREE.HemisphereLight;
   private readonly interior: THREE.DirectionalLight;
-  private readonly ceu = new THREE.Color();
-  private readonly fundo = new THREE.Color(0x8fd0ff);
-  private readonly matLuz = mat(0x333333, { emissive: 0xffd58a, emissiveIntensity: 0 });
-  private readonly matJanela = mat(0x37415a, { emissive: 0xffd27a, emissiveIntensity: 0, roughness: 0.3 });
+  /** Luz difusa quente das salas à noite (ilumina também as paredes de lado). */
+  private readonly interiorDifusa = new THREE.HemisphereLight(0xffe6c4, 0x7a5a3c, 0);
+  private readonly ceu: Sky;
+  private readonly cenaCeu = new THREE.Scene();
+  private readonly pmrem: THREE.PMREMGenerator;
+  private alvoAmbiente: THREE.WebGLRenderTarget | null = null;
+  private readonly ultimoSol = new THREE.Vector3(0, -1, 0);
+  private tempoAmbiente = 0;
+  private readonly matLuz = mat(0x222222, { emissive: 0xffd9a0, emissiveIntensity: 0 });
+  private readonly matJanelaAcesa = mat(0x222222, { emissive: 0xffd8a0, emissiveIntensity: 0, roughness: 0.4 });
+  private readonly matPoca: THREE.MeshBasicMaterial;
   private readonly carros: { o: THREE.Group; v: number }[] = [];
-  private readonly nuvens: THREE.Group[] = [];
+  private readonly arvores: THREE.Object3D[] = [];
+  /** Árvores geradas (fora da cena): animam o vento das folhas, que todas as cópias partilham. */
+  private readonly especies: Tree[] = [];
+  private readonly dirSol = new THREE.Vector3();
   private readonly centro: THREE.Vector3;
+  private tempo = 0;
   /** Quanto de noite está (0 de dia, 1 de noite), para a interface. */
   noite = 0;
 
   private readonly cena: THREE.Scene;
 
-  constructor(cena: THREE.Scene, largura: number, altura: number, entrada: { x: number; z: number }) {
+  constructor(cena: THREE.Scene, renderer: THREE.WebGLRenderer, largura: number, altura: number, entrada: { x: number; z: number }) {
     this.cena = cena;
     this.centro = new THREE.Vector3((largura - 1) / 2, 0, (altura - 1) / 2);
-    cena.background = this.fundo;
-    cena.fog = new THREE.Fog(0x8fd0ff, 70, 170);
+    this.pmrem = new THREE.PMREMGenerator(renderer);
 
-    this.hemi = new THREE.HemisphereLight(0xdfeaff, 0x5c7a3a, 1.1);
+    this.ceu = new Sky();
+    this.ceu.scale.setScalar(900);
+    const u = this.ceu.material.uniforms;
+    u.turbidity.value = 4;
+    u.rayleigh.value = 1.6;
+    u.mieCoefficient.value = 0.004;
+    u.mieDirectionalG.value = 0.82;
+    u.cloudCoverage.value = 0.35;
+    u.cloudDensity.value = 0.45;
+    cena.add(this.ceu);
+    this.cenaCeu.add(new Sky()); // cópia só para gerar a luz do ambiente
+    cena.fog = new THREE.FogExp2(NEVOA_DIA.getHex(), 0.0065);
+
+    this.hemi = new THREE.HemisphereLight(0xdfeaff, 0x4a5a32, 0.25);
     cena.add(this.hemi);
-    this.sol = new THREE.DirectionalLight(0xfff2dc, 2.6);
+    this.sol = new THREE.DirectionalLight(0xfff2dc, 3);
     this.sol.castShadow = true;
-    this.sol.shadow.mapSize.set(2048, 2048);
+    this.sol.shadow.mapSize.set(4096, 4096);
     const c = this.sol.shadow.camera;
-    c.left = c.bottom = -24;
-    c.right = c.top = 24;
+    c.left = c.bottom = -21;
+    c.right = c.top = 21;
     c.near = 1;
-    c.far = 140;
-    this.sol.shadow.bias = -0.0004;
-    this.sol.shadow.normalBias = 0.03;
-    this.sol.shadow.radius = 3;
+    c.far = 160;
+    this.sol.shadow.bias = -0.00025;
+    this.sol.shadow.normalBias = 0.02;
+    this.sol.shadow.radius = 2.5;
     this.sol.target.position.copy(this.centro);
     cena.add(this.sol, this.sol.target);
     // Luz do escritório à noite (de cima, sem sombras)
     this.interior = new THREE.DirectionalLight(0xffe2b8, 0);
     this.interior.position.set(this.centro.x, 30, this.centro.z + 4);
     this.interior.target.position.copy(this.centro);
-    cena.add(this.interior, this.interior.target);
+    cena.add(this.interior, this.interior.target, this.interiorDifusa);
+
+    const poca = document.createElement('canvas');
+    poca.width = poca.height = 128;
+    const g = poca.getContext('2d')!;
+    const grad = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+    grad.addColorStop(0, 'rgba(255,214,150,0.85)');
+    grad.addColorStop(0.5, 'rgba(255,190,120,0.25)');
+    grad.addColorStop(1, 'rgba(255,180,110,0)');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 128, 128);
+    this.matPoca = new THREE.MeshBasicMaterial({
+      map: new THREE.CanvasTexture(poca), transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending,
+    });
 
     this.criarTerreno(largura, altura, entrada);
     this.criarEstrada(altura, entrada);
     this.criarArvores(largura, altura);
     this.criarCidade();
-    this.criarNuvens();
   }
 
   set sombras(v: boolean) {
     this.sol.castShadow = v;
   }
 
+  /** Resolução das sombras e número de árvores visíveis conforme a qualidade. */
+  qualidade(q: Qualidade): void {
+    const n = q === 'alta' ? 4096 : q === 'media' ? 2048 : 1024;
+    if (this.sol.shadow.mapSize.x !== n) {
+      this.sol.shadow.mapSize.set(n, n);
+      this.sol.shadow.map?.dispose();
+      this.sol.shadow.map = null;
+    }
+    this.arvores.forEach((a, i) => (a.visible = q !== 'baixa' || i % 2 === 0));
+  }
+
   // -------------------------------------------------------------------------
 
   private criarTerreno(largura: number, altura: number, entrada: { x: number; z: number }): void {
-    // Relva com variação de cor por vértice
-    const geo = new THREE.PlaneGeometry(260, 260, 60, 60).rotateX(-Math.PI / 2);
-    const cores: number[] = [];
-    const cor = new THREE.Color();
-    const p = geo.attributes.position;
-    for (let i = 0; i < p.count; i++) {
-      const v = hash(i * 13 + 7);
-      cor.setHSL(0.27 + v * 0.05, 0.5, 0.42 + v * 0.08);
-      cores.push(cor.r, cor.g, cor.b);
-    }
-    geo.setAttribute('color', new THREE.Float32BufferAttribute(cores, 3));
-    const relva = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 }));
+    const relva = new THREE.Mesh(
+      new THREE.PlaneGeometry(320, 320).rotateX(-Math.PI / 2),
+      texturaNoMundo(materialPBR('leafy_grass', 1, { color: 0xc4d6a0, roughness: 1 }), 0.6, 0.55),
+    );
     relva.position.set(this.centro.x, -0.12, this.centro.z);
     relva.receiveShadow = true;
     this.cena.add(relva);
 
-    // Laje do edifício (vê-se entre as células do chão, como juntas)
-    const laje = new THREE.Mesh(new THREE.BoxGeometry(largura + 0.5, 0.12, altura + 0.5), mat(0xa3a8b8, { roughness: 0.9 }));
-    laje.position.set(this.centro.x, -0.065, this.centro.z);
-    laje.receiveShadow = true;
+    // Laje do edifício (betão), com um rebordo escuro
+    const laje = new THREE.Mesh(
+      uvEmMetros(new THREE.BoxGeometry(largura + 0.5, 0.14, altura + 0.5), largura + 0.5, 0.14, altura + 0.5, 2),
+      materialPBR('concrete_wall_006', 1, { color: 0xb8b8b4 }),
+    );
+    laje.position.set(this.centro.x, -0.075, this.centro.z);
+    laje.receiveShadow = laje.castShadow = true;
     this.cena.add(laje);
-    // Rodapé exterior escuro
-    const rodape = new THREE.Mesh(new THREE.BoxGeometry(largura + 0.7, 0.06, altura + 0.7), mat(0x4b5163));
-    rodape.position.set(this.centro.x, -0.1, this.centro.z);
-    this.cena.add(rodape);
 
-    // Caminho de entrada até ao passeio, com tapete e dois arbustos
-    const caminho = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.05, 1.1), mat(0xe7dcc8, { roughness: 0.9 }));
-    caminho.position.set(entrada.x - 2.2, -0.09, entrada.z);
+    // Caminho de entrada até ao passeio, com tapete e dois arbustos em vasos
+    const caminho = new THREE.Mesh(
+      uvEmMetros(new THREE.BoxGeometry(3.4, 0.05, 1.1), 3.4, 0.05, 1.1, 1.6),
+      materialPBR('pavement_04', 1),
+    );
+    caminho.position.set(entrada.x - 2.2, -0.095, entrada.z);
     caminho.receiveShadow = true;
     this.cena.add(caminho);
-    const tapete = new THREE.Mesh(new RoundedBoxGeometry(0.7, 0.02, 0.8, 2, 0.01), mat(0xb91c1c, { roughness: 1 }));
-    tapete.position.set(entrada.x - 0.85, -0.055, entrada.z);
+    const tapete = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.012, 0.75), mat(0x3a2f2a, { roughness: 1 }));
+    tapete.position.set(entrada.x - 0.8, -0.062, entrada.z);
+    tapete.receiveShadow = true;
     this.cena.add(tapete);
     for (const dz of [-0.85, 0.85]) {
-      const vaso = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.16, 0.3, 12), mat(0x334155));
-      vaso.position.set(entrada.x - 1.1, 0.06, entrada.z + dz);
-      vaso.castShadow = true;
-      const arbusto = new THREE.Mesh(new THREE.IcosahedronGeometry(0.28, 1), mat(0x22a35a, { flatShading: true }));
-      arbusto.position.set(entrada.x - 1.1, 0.42, entrada.z + dz);
-      arbusto.castShadow = true;
-      this.cena.add(vaso, arbusto);
+      const vaso = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.17, 0.32, 24), mat(0x30343b, { roughness: 0.6 }));
+      vaso.position.set(entrada.x - 1.1, 0.04, entrada.z + dz);
+      vaso.castShadow = vaso.receiveShadow = true;
+      this.cena.add(vaso);
+      const p = R.modelos.planta.clone();
+      const tam = R.modelos.planta.userData.tamanho as THREE.Vector3;
+      p.scale.setScalar(0.62 / tam.y);
+      p.position.set(entrada.x - 1.1, 0.13, entrada.z + dz);
+      this.cena.add(p);
     }
   }
 
   private criarEstrada(altura: number, entrada: { x: number; z: number }): void {
     const x = -6.5;
-    const estrada = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.02, 260), mat(0x3a3f4b, { roughness: 0.95 }));
-    estrada.position.set(x, -0.115, this.centro.z);
+    const asfalto = texturaNoMundo(materialPBR('asphalt_02', 1, { color: 0x8a8a8a, roughness: 1 }), 0.55, 0.25);
+    const estrada = new THREE.Mesh(new THREE.PlaneGeometry(4.2, 320).rotateX(-Math.PI / 2), asfalto);
+    estrada.position.set(x, -0.105, this.centro.z);
     estrada.receiveShadow = true;
     this.cena.add(estrada);
-    // Riscos ao centro
-    const geoRisco = new THREE.BoxGeometry(0.12, 0.005, 1.2);
-    const matRisco = mat(0xf8fafc, { roughness: 0.6 });
-    for (let z = -110; z < 130; z += 3) {
+    // Traço descontínuo ao centro e linhas contínuas nas bermas
+    const matRisco = mat(0xf2f2ee, { roughness: 0.7 });
+    const geoRisco = new THREE.PlaneGeometry(0.07, 1.6).rotateX(-Math.PI / 2);
+    for (let z = -140; z < 160; z += 3.6) {
       const r = new THREE.Mesh(geoRisco, matRisco);
       r.position.set(x, -0.1, z);
+      r.receiveShadow = true;
       this.cena.add(r);
     }
-    // Passeios
-    for (const px of [x + 2.75, x - 2.75]) {
-      const passeio = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.1, 260), mat(0xcfd4dc, { roughness: 0.9 }));
+    for (const bx of [-1.9, 1.9]) {
+      const l = new THREE.Mesh(new THREE.PlaneGeometry(0.06, 320).rotateX(-Math.PI / 2), matRisco);
+      l.position.set(x + bx, -0.1, this.centro.z);
+      this.cena.add(l);
+    }
+    // Passeios (calçada) com lancil de betão
+    const matPasseio = texturaNoMundo(materialPBR('pavement_04', 1), 0.54, 0.2);
+    const matLancil = mat(0xa7a7a2, { roughness: 0.85 });
+    for (const lado of [1, -1]) {
+      const px = x + lado * 2.75;
+      const passeio = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.1, 320), matPasseio);
       passeio.position.set(px, -0.07, this.centro.z);
       passeio.receiveShadow = true;
       this.cena.add(passeio);
+      const lancil = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.11, 320), matLancil);
+      lancil.position.set(px - lado * 0.66, -0.065, this.centro.z);
+      lancil.receiveShadow = true;
+      this.cena.add(lancil);
     }
-    // Candeeiros
-    const geoPoste = new THREE.CylinderGeometry(0.05, 0.07, 3, 8);
-    const matPoste = mat(0x374151, { metalness: 0.5, roughness: 0.4 });
-    for (let z = -14; z <= altura + 14; z += 7) {
+    // Candeeiros clássicos (Poly Haven), com poça de luz no chão à noite
+    const vidros: THREE.Material[] = [];
+    const modelo = R.modelos.candeeiro;
+    modelo.traverse((o) => {
+      const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
+      // Só o vidro e a lâmpada (o material do poste também se chama "street_lamp_01")
+      if (m && /_(glass|bulb)$/i.test(m.name) && !vidros.includes(m)) vidros.push(m);
+    });
+    const tamanho = modelo.userData.tamanho as THREE.Vector3;
+    const geoPoca = new THREE.PlaneGeometry(3.4, 3.4).rotateX(-Math.PI / 2);
+    for (let z = -16; z <= altura + 16; z += 6) {
       if (Math.abs(z - entrada.z) < 1.5) continue;
-      const g = new THREE.Group();
-      const poste = new THREE.Mesh(geoPoste, matPoste);
-      poste.position.y = 1.5;
-      poste.castShadow = true;
-      const braco = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.06, 0.06), matPoste);
-      braco.position.set(-0.32, 3, 0);
-      const lampada = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.08, 0.2), this.matLuz);
-      lampada.position.set(-0.6, 2.95, 0);
-      g.add(poste, braco, lampada);
-      g.position.set(x + 2.6, -0.02, z);
-      this.cena.add(g);
+      const c = modelo.clone();
+      c.scale.setScalar((3.9 * M) / tamanho.y);
+      c.position.set(x + 2.75 - 0.45, -0.02, z);
+      c.rotation.y = Math.PI / 2;
+      this.cena.add(c);
+      const p = new THREE.Mesh(geoPoca, this.matPoca);
+      p.position.set(x + 1.9, -0.095, z);
+      p.renderOrder = 2;
+      this.cena.add(p);
+    }
+    // O vidro dos candeeiros passa a emitir luz (o mesmo material serve para todos)
+    for (const v of vidros) {
+      const m = v as THREE.MeshStandardMaterial;
+      m.emissive = new THREE.Color(0xffd29a);
+      m.emissiveIntensity = 0;
+      this.matLuzes.push(m);
     }
     // Carros
-    const CORES = [0xef4444, 0x3b82f6, 0xfacc15, 0x10b981, 0xf97316, 0xe5e7eb];
-    for (let i = 0; i < 5; i++) {
-      const g = this.criarCarro(CORES[i % CORES.length]);
+    const CORES = [0x9b1b1b, 0x1f3a6e, 0xd8d8d8, 0x2b2d31, 0x6b7280, 0x0f4c3a, 0xb45309, 0xf2f2f2];
+    for (let i = 0; i < 7; i++) {
+      const g = this.criarCarro(CORES[i % CORES.length], i);
       const sentido = i % 2 ? 1 : -1;
-      g.position.set(x + sentido * 1.0, -0.1, -100 + hash(i + 40) * 220);
+      g.position.set(x + sentido * 1.0, -0.1, -120 + hash(i + 40) * 260);
       g.rotation.y = sentido > 0 ? 0 : Math.PI;
       this.cena.add(g);
-      this.carros.push({ o: g, v: sentido * (5 + hash(i) * 4) });
+      this.carros.push({ o: g, v: sentido * (5 + hash(i) * 3) });
     }
   }
 
-  private criarCarro(cor: number): THREE.Group {
+  private readonly matLuzes: THREE.MeshStandardMaterial[] = [];
+
+  /** Carro de passeio (em metros: 4,4 × 1,8 × 1,45), com pintura com verniz, vidros escuros e faróis. */
+  private criarCarro(cor: number, i: number): THREE.Group {
     const g = new THREE.Group();
-    const m = mat(cor, { roughness: 0.35, metalness: 0.3 });
-    const corpo = new THREE.Mesh(new RoundedBoxGeometry(0.95, 0.38, 2.0, 2, 0.12), m);
-    corpo.position.y = 0.38;
-    const cabine = new THREE.Mesh(new RoundedBoxGeometry(0.85, 0.34, 1.05, 2, 0.12), mat(0x1e293b, { roughness: 0.15, metalness: 0.5 }));
-    cabine.position.set(0, 0.7, -0.1);
-    corpo.castShadow = cabine.castShadow = true;
-    g.add(corpo, cabine);
-    const geoRoda = new THREE.CylinderGeometry(0.17, 0.17, 0.12, 12).rotateZ(Math.PI / 2);
-    for (const [rx, rz] of [[-0.45, 0.6], [0.45, 0.6], [-0.45, -0.6], [0.45, -0.6]]) {
-      const r = new THREE.Mesh(geoRoda, mat(0x111111));
-      r.position.set(rx, 0.17, rz);
-      g.add(r);
+    const m = new THREE.Group();
+    m.scale.setScalar(M);
+    g.add(m);
+    const pintura = new THREE.MeshPhysicalMaterial({ color: cor, metalness: 0.55, roughness: 0.32, clearcoat: 1, clearcoatRoughness: 0.06 });
+    const vidro = new THREE.MeshPhysicalMaterial({ color: 0x0b0f16, metalness: 0.2, roughness: 0.05, clearcoat: 1 });
+    const borracha = mat(0x101012, { roughness: 0.9 });
+    const jante = mat(0xb9bdc4, { metalness: 1, roughness: 0.3 });
+    const extrudir = (pts: [number, number][], largura: number, material: THREE.Material, bisel: number) => {
+      const s = new THREE.Shape(pts.map(([z, y]) => new THREE.Vector2(z, y)));
+      const geo = new THREE.ExtrudeGeometry(s, { depth: largura - bisel * 2, bevelEnabled: true, bevelSize: bisel, bevelThickness: bisel, bevelSegments: 3, curveSegments: 6 });
+      geo.translate(0, 0, -(largura - bisel * 2) / 2);
+      geo.rotateY(-Math.PI / 2); // perfil desenhado em (z, y), extrudido ao longo de x
+      const o = new THREE.Mesh(geo, material);
+      o.castShadow = o.receiveShadow = true;
+      return o;
+    };
+    const suv = hash(i + 3) < 0.3;
+    const a = suv ? 0.12 : 0;
+    // Carroçaria até à linha da cintura
+    m.add(extrudir([[2.2, 0.32], [2.22, 0.62], [2.05, 0.8 + a], [1.0, 0.92 + a], [-1.7, 0.96 + a], [-2.18, 0.86 + a], [-2.2, 0.36], [-1.6, 0.28], [1.6, 0.28]], 1.8, pintura, 0.07));
+    // Habitáculo de vidro e tejadilho
+    m.add(extrudir([[0.95, 0.9 + a], [0.15, 1.38 + a], [-1.05, 1.4 + a], [-1.75, 0.95 + a]], 1.56, vidro, 0.05));
+    m.add(extrudir([[0.1, 1.36 + a], [-1.0, 1.38 + a], [-1.08, 1.43 + a], [0.12, 1.42 + a]], 1.5, pintura, 0.04));
+    // Rodas
+    const geoPneu = new THREE.CylinderGeometry(0.33, 0.33, 0.22, 24).rotateZ(Math.PI / 2);
+    const geoJante = new THREE.CylinderGeometry(0.21, 0.21, 0.23, 16).rotateZ(Math.PI / 2);
+    for (const [rx, rz] of [[-0.8, 1.35], [0.8, 1.35], [-0.8, -1.3], [0.8, -1.3]]) {
+      const p = new THREE.Mesh(geoPneu, borracha);
+      p.position.set(rx, 0.33, rz);
+      p.castShadow = true;
+      const j = new THREE.Mesh(geoJante, jante);
+      j.position.copy(p.position);
+      m.add(p, j);
     }
-    for (const fx of [-0.3, 0.3]) {
-      const farol = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.08, 0.04), this.matLuz);
-      farol.position.set(fx, 0.42, 1.0);
-      g.add(farol);
+    // Faróis e farolins
+    const farol = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff4dd, emissiveIntensity: 0.4, roughness: 0.1 });
+    const farolim = new THREE.MeshStandardMaterial({ color: 0x550000, emissive: 0xff2020, emissiveIntensity: 0.6, roughness: 0.2 });
+    this.matLuzes.push(farol);
+    for (const fx of [-0.62, 0.62]) {
+      const f = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.1, 0.05), farol);
+      f.position.set(fx, 0.72 + a, 2.2);
+      const t = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.09, 0.05), farolim);
+      t.position.set(fx, 0.8 + a, -2.2);
+      m.add(f, t);
     }
     return g;
   }
 
   private criarArvores(largura: number, altura: number): void {
-    const tronco = mat(0x7c4a2a, { roughness: 0.9 });
-    const copas = [0x2fb35d, 0x4cc76f, 0x1f9a55, 0x86d65a].map((c) => mat(c, { flatShading: true, roughness: 0.8 }));
-    const geoCopa = new THREE.IcosahedronGeometry(1, 0);
-    const geoPinheiro = new THREE.ConeGeometry(1, 1.6, 7);
-    const geoTronco = new THREE.CylinderGeometry(0.12, 0.17, 1, 7);
+    // Poucas variantes geradas (ez-tree), muitas cópias: a geometria é partilhada.
+    const especies = ['Ash Medium', 'Oak Medium', 'Aspen Medium', 'Ash Small', 'Oak Small', 'Pine Medium'];
+    const variantes = especies.map((nome, k) => {
+      const t = new Tree();
+      t.loadPreset(nome);
+      t.options.seed = 1000 + k * 77;
+      t.generate();
+      arvorePBR(t);
+      t.updateMatrixWorld(true);
+      const caixa = new THREE.Box3().setFromObject(t);
+      return { t, alturaModelo: caixa.max.y - caixa.min.y };
+    });
+    const arbusto = new Tree();
+    arbusto.loadPreset('Bush 1');
+    arbusto.generate();
+    arvorePBR(arbusto);
+    const alturaArbusto = new THREE.Box3().setFromObject(arbusto).getSize(new THREE.Vector3()).y;
+
     let n = 0;
-    for (let i = 0; i < 400 && n < 46; i++) {
-      const x = -30 + hash(i * 3 + 1) * (largura + 60);
-      const z = -26 + hash(i * 3 + 2) * (altura + 52);
-      const dentro = x > -2.5 && x < largura + 1.5 && z > -2.5 && z < altura + 1.5;
+    for (let i = 0; i < 500 && n < 42; i++) {
+      const x = -34 + hash(i * 3 + 1) * (largura + 70);
+      const z = -30 + hash(i * 3 + 2) * (altura + 60);
+      const dentro = x > -2.8 && x < largura + 2 && z > -2.8 && z < altura + 2;
       const naEstrada = x > -10.5 && x < -2.2;
-      const naCidade = x < -11;
+      const naCidade = x < -11.5;
       if (dentro || naEstrada || naCidade) continue;
       n++;
-      const t = 0.8 + hash(i * 3 + 3) * 0.7;
-      const g = new THREE.Group();
-      const tr = new THREE.Mesh(geoTronco, tronco);
-      tr.position.y = 0.5 * t;
-      tr.scale.setScalar(t);
-      tr.castShadow = true;
-      g.add(tr);
-      const copa = copas[i % copas.length];
-      if (hash(i + 77) < 0.35) {
-        for (let k = 0; k < 3; k++) {
-          const c = new THREE.Mesh(geoPinheiro, copa);
-          c.position.y = (1.2 + k * 0.7) * t;
-          c.scale.setScalar((1.1 - k * 0.25) * t);
-          c.castShadow = true;
-          g.add(c);
-        }
-      } else {
-        for (let k = 0; k < 3; k++) {
-          const c = new THREE.Mesh(geoCopa, copa);
-          c.position.set((hash(i + k) - 0.5) * 0.7 * t, (1.5 + hash(i * 5 + k) * 0.6) * t, (hash(i + k + 9) - 0.5) * 0.7 * t);
-          c.scale.setScalar((0.6 + hash(i * 7 + k) * 0.35) * t);
-          c.rotation.set(hash(k) * 3, hash(k + i) * 3, 0);
-          c.castShadow = true;
-          g.add(c);
-        }
-      }
-      g.position.set(x, -0.12, z);
-      this.cena.add(g);
+      const v = variantes[i % variantes.length];
+      const alvo = (7 + hash(i * 3 + 3) * 6) * M;
+      const a = new THREE.Group();
+      a.add(v.t.branchesMesh.clone(), v.t.leavesMesh.clone());
+      a.scale.setScalar(alvo / v.alturaModelo);
+      a.rotation.y = hash(i + 5) * Math.PI * 2;
+      a.position.set(x, -0.12, z);
+      this.cena.add(a);
+      this.arvores.push(a);
     }
+    // Sebe baixa ao longo do terreno (do lado de dentro do passeio)
+    for (let z = -1.5; z <= altura + 0.5; z += 1.6) {
+      const b = new THREE.Group();
+      b.add(arbusto.branchesMesh.clone(), arbusto.leavesMesh.clone());
+      b.scale.setScalar((0.9 * M) / alturaArbusto);
+      b.rotation.y = hash(z * 10) * 6;
+      b.position.set(-2.6, -0.12, z);
+      this.cena.add(b);
+    }
+    this.especies.push(...variantes.map((v) => v.t), arbusto);
   }
 
   private criarCidade(): void {
-    const CORES = [0xfca5a5, 0x93c5fd, 0xfde68a, 0xc4b5fd, 0x99f6e4, 0xfdba74, 0xe2e8f0];
-    for (let i = 0; i < 18; i++) {
-      const w = 3 + hash(i + 200) * 3;
-      const d = 4 + hash(i + 300) * 4;
-      const h = 3 + hash(i + 400) * 9;
-      const x = -14 - w / 2 - hash(i + 500) * 8;
-      const z = -40 + i * 7 + hash(i + 600) * 2;
-      const g = new THREE.Group();
-      const corpo = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(CORES[i % CORES.length], { roughness: 0.85 }));
-      corpo.position.y = h / 2;
+    const fachadas = [
+      materialPBR('brick_wall_001', 1, { roughness: 0.9 }),
+      materialPBR('concrete_wall_006', 1, { color: 0xd8d2c6 }),
+      materialPBR('brick_wall_001', 1, { color: 0xc9b9a6, roughness: 0.9 }),
+      materialPBR('painted_plaster_wall', 1, { color: 0xe8d9b5 }),
+      materialPBR('painted_plaster_wall', 1, { color: 0xf3f0ea }),
+    ];
+    const vidro = new THREE.MeshStandardMaterial({ color: 0x1a2431, metalness: 0.85, roughness: 0.08 });
+    const telhado = mat(0x3a3d42, { roughness: 0.9 });
+    const geoJanela = new THREE.BoxGeometry(0.04, 0.62, 0.52);
+    const janelas: THREE.Matrix4[] = [];
+    const acesas: THREE.Matrix4[] = [];
+    const mtx = new THREE.Matrix4();
+    for (let i = 0; i < 20; i++) {
+      const w = 3.4 + hash(i + 200) * 3;
+      const d = 4.5 + hash(i + 300) * 3.5;
+      const pisos = 2 + Math.floor(hash(i + 400) * 6);
+      const h = pisos * 1.75 + 0.4;
+      const x = -14.2 - w / 2 - hash(i + 500) * 6;
+      const z = -44 + i * 7.2 + hash(i + 600) * 1.5;
+      const corpo = new THREE.Mesh(uvEmMetros(new THREE.BoxGeometry(w, h, d), w, h, d, 3), fachadas[i % fachadas.length]);
+      corpo.position.set(x, h / 2 - 0.12, z);
       corpo.castShadow = corpo.receiveShadow = true;
-      g.add(corpo);
-      // Janelas na fachada virada para a estrada
-      for (let y = 1.2; y < h - 0.5; y += 1.4)
-        for (let k = -d / 2 + 0.8; k < d / 2 - 0.4; k += 1.2) {
-          const j = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.7, 0.6), this.matJanela);
-          j.position.set(w / 2 + 0.02, y, k);
-          g.add(j);
+      this.cena.add(corpo);
+      const topo = new THREE.Mesh(new THREE.BoxGeometry(w + 0.12, 0.12, d + 0.12), telhado);
+      topo.position.set(x, h - 0.06, z);
+      topo.castShadow = true;
+      this.cena.add(topo);
+      // Janelas nas fachadas viradas para a estrada (+x) e para os lados (±z)
+      for (let p = 0; p < pisos; p++) {
+        const y = 0.95 + p * 1.75 - 0.12;
+        for (let k = -d / 2 + 0.75; k < d / 2 - 0.4; k += 1.15) {
+          mtx.makeTranslation(x + w / 2 + 0.01, y, z + k);
+          (hash(i * 97 + p * 13 + k * 7) < 0.45 ? acesas : janelas).push(mtx.clone());
         }
-      g.position.set(x, -0.12, z);
-      this.cena.add(g);
-    }
-  }
-
-  private criarNuvens(): void {
-    const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, transparent: true, opacity: 0.92 });
-    const geo = new THREE.IcosahedronGeometry(1, 1);
-    for (let i = 0; i < 9; i++) {
-      const g = new THREE.Group();
-      const n = 3 + Math.floor(hash(i + 800) * 3);
-      for (let k = 0; k < n; k++) {
-        const b = new THREE.Mesh(geo, m);
-        b.position.set(k * 1.5 - n * 0.7, hash(i * 9 + k) * 0.6, (hash(i * 4 + k) - 0.5) * 1.2);
-        b.scale.set(1.6 + hash(k + i) * 0.8, 0.9 + hash(k * 2 + i) * 0.4, 1.3);
-        g.add(b);
+        for (const lado of [-1, 1])
+          for (let k = -w / 2 + 0.75; k < w / 2 - 0.4; k += 1.3) {
+            mtx.makeRotationY(Math.PI / 2).setPosition(x + k, y, z + lado * (d / 2 + 0.01));
+            (hash(i * 31 + p * 7 + k * 11 + lado) < 0.4 ? acesas : janelas).push(mtx.clone());
+          }
       }
-      g.position.set(-60 + hash(i + 900) * 140, 20 + hash(i + 950) * 8, -50 + hash(i + 990) * 120);
-      this.cena.add(g);
-      this.nuvens.push(g);
     }
+    for (const [lista, material] of [[janelas, vidro], [acesas, this.matJanelaAcesa]] as const) {
+      const im = new THREE.InstancedMesh(geoJanela, material, lista.length);
+      lista.forEach((mm, k) => im.setMatrixAt(k, mm));
+      this.cena.add(im);
+    }
+    // As janelas que acendem à noite são vidro durante o dia
+    this.matJanelaAcesa.color.copy(vidro.color);
+    this.matJanelaAcesa.metalness = 0.85;
+    this.matJanelaAcesa.roughness = 0.08;
   }
 
   // -------------------------------------------------------------------------
 
   /** Atualiza céu, luzes e coisas que mexem. `minutoDoDia` vem do jogo. */
   atualizar(dt: number, minutoDoDia: number, ciclo: boolean): void {
+    this.tempo += dt;
     const h = ciclo ? minutoDoDia / 60 : HORA_FIXA;
-    let i = 0;
-    while (i < MOMENTOS.length - 2 && MOMENTOS[i + 1].h <= h) i++;
-    const a = MOMENTOS[i];
-    const b = MOMENTOS[i + 1];
-    const t = Math.min(1, Math.max(0, (h - a.h) / (b.h - a.h)));
-    const mistura = (x: number, y: number) => x + (y - x) * t;
+    // Sol: nasce às 6h a este, põe-se às 19h30 a oeste; elevação máxima ~62°.
+    const fase = (h - 6) / 13.5;
+    const elev = Math.sin(fase * Math.PI) * 1.08 - 0.06; // radianos; < 0 de noite
+    const azim = Math.PI * (0.15 + fase * 0.7);
+    const dirSol = this.dirSol.set(Math.cos(azim) * Math.cos(elev), Math.sin(elev), Math.sin(azim) * Math.cos(elev) * 0.6 + 0.35).normalize();
+    const dia = THREE.MathUtils.smoothstep(elev, -0.08, 0.12);
+    const alto = THREE.MathUtils.smoothstep(elev, 0.05, 0.6);
+    this.noite = 1 - dia;
 
-    this.ceu.setHex(a.ceu).lerp(new THREE.Color(b.ceu), t);
-    this.fundo.copy(this.ceu);
-    this.cena.fog!.color.copy(this.ceu);
-    this.sol.intensity = mistura(a.sol, b.sol);
-    this.sol.color.setHex(a.corSol).lerp(new THREE.Color(b.corSol), t);
-    this.hemi.intensity = mistura(a.hemi, b.hemi);
-    this.hemi.color.copy(COR_HEMI_DIA).lerp(COR_HEMI_NOITE, mistura(a.luzes, b.luzes));
-    this.interior.intensity = mistura(a.interior, b.interior) * 1.1;
-    const luzes = mistura(a.luzes, b.luzes);
-    this.matLuz.emissiveIntensity = luzes * 3.4;
-    this.matJanela.emissiveIntensity = luzes * 2.2;
-    this.noite = luzes;
+    const u = this.ceu.material.uniforms;
+    u.sunPosition.value.copy(dirSol);
+    u.time.value = this.tempo;
+    u.rayleigh.value = 1.2 + (1 - alto) * 1.6;
+    u.turbidity.value = 3 + (1 - alto) * 4;
 
-    // Sol de este (manhã) para oeste (tarde); de noite, a lua fica alta e fixa.
-    const dia = h >= 6 && h <= 19.5;
-    const ang = dia ? ((h - 6) / 13.5) * Math.PI : Math.PI * 0.35;
-    this.sol.position.set(
-      this.centro.x + Math.cos(ang) * 32,
-      Math.max(8, Math.sin(ang) * 34),
-      this.centro.z + 16,
-    );
+    // Luz direta: sol (quente ao nascer/pôr) ou lua (azulada, fraca)
+    if (dia > 0.02) {
+      this.sol.position.copy(this.centro).addScaledVector(dirSol, 60);
+      this.sol.color.copy(COR_SOL_BAIXO).lerp(COR_SOL_ALTO, alto);
+      this.sol.intensity = 3.4 * dia * (0.35 + 0.65 * alto);
+    } else {
+      this.sol.position.set(this.centro.x - 20, 50, this.centro.z + 25);
+      this.sol.color.copy(COR_LUA);
+      this.sol.intensity = 0.35;
+    }
+    // De noite o céu não dá luz de ambiente: o hemisfério faz de luar difuso e luz da cidade.
+    this.hemi.intensity = 0.3 - 0.08 * dia;
+    this.interior.intensity = (1 - dia) * 0.75;
+    this.interiorDifusa.intensity = (1 - dia) * 0.55;
+    const luzes = 1 - THREE.MathUtils.smoothstep(elev, -0.02, 0.14);
+    this.matLuz.emissiveIntensity = luzes * 3;
+    for (const m of this.matLuzes) m.emissiveIntensity = 0.3 + luzes * 4;
+    this.matJanelaAcesa.emissiveIntensity = luzes * 1.6;
+    this.matPoca.opacity = luzes * 0.55;
+
+    const nevoa = this.cena.fog as THREE.FogExp2;
+    nevoa.color.copy(NEVOA_POR).lerp(NEVOA_DIA, alto).lerp(NEVOA_NOITE, 1 - dia);
+    // O céu do Sky é muito luminoso (HDR): como luz de ambiente usa-se só uma parte.
+    this.cena.environmentIntensity = 0.05 + 0.32 * dia;
+    this.cena.backgroundIntensity = 1;
+
+    // Luz do ambiente (reflexos e luz difusa) gerada a partir do céu, quando o sol mexe o suficiente
+    this.tempoAmbiente -= dt;
+    if (this.ultimoSol.angleTo(dirSol) > 0.02 && this.tempoAmbiente <= 0) {
+      this.ultimoSol.copy(dirSol);
+      this.tempoAmbiente = 0.5;
+      const copia = this.cenaCeu.children[0] as Sky;
+      const uc = copia.material.uniforms;
+      for (const k of ['turbidity', 'rayleigh', 'mieCoefficient', 'mieDirectionalG', 'cloudCoverage', 'cloudDensity'])
+        uc[k].value = u[k].value;
+      uc.sunPosition.value.copy(dirSol);
+      uc.showSunDisc.value = 0;
+      copia.scale.setScalar(100);
+      const novo = this.pmrem.fromScene(this.cenaCeu, 0, 0.1, 400);
+      this.cena.environment = novo.texture;
+      this.alvoAmbiente?.dispose();
+      this.alvoAmbiente = novo;
+    }
 
     for (const c of this.carros) {
       c.o.position.z += c.v * dt;
-      if (c.o.position.z > 130) c.o.position.z = -110;
-      if (c.o.position.z < -110) c.o.position.z = 130;
+      if (c.o.position.z > 150) c.o.position.z = -130;
+      if (c.o.position.z < -130) c.o.position.z = 150;
     }
-    for (const n of this.nuvens) {
-      n.position.x += dt * 0.6;
-      if (n.position.x > 90) n.position.x = -70;
-    }
+    for (const e of this.especies) e.update(this.tempo);
   }
 }

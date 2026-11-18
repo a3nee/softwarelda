@@ -572,3 +572,23 @@ input[type=range] { width: 100%; accent-color: var(--violeta); }
   100% { opacity: 0; transform: translate(-50%, -260%) scale(1); }
 }
 @media (max-height: 760px) { #missoes .missao small { display: none; } }
+
+/* Ecrã de arranque (enquanto carregam os modelos 3D) */
+#carregamento {
+  position: fixed; inset: 0; z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 18px; background: radial-gradient(ellipse at 50% 40%, #182042 0%, #070b18 70%); color: #e8ecff;
+  font-family: 'Segoe UI', system-ui, sans-serif; transition: opacity 0.6s ease;
+}
+#carregamento.fim { opacity: 0; pointer-events: none; }
+.carr-marca {
+  width: 88px; height: 88px; border-radius: 22px; display: grid; place-items: center; font-weight: 900; font-size: 34px;
+  background: linear-gradient(135deg, #22d3ee, #8b5cf6 55%, #f472b6); box-shadow: 0 12px 50px rgba(139, 92, 246, 0.45);
+  animation: carr-pulso 1.6s ease-in-out infinite;
+}
+.carr-titulo { font-size: 30px; font-weight: 800; letter-spacing: -0.5px; }
+.carr-titulo b { background: linear-gradient(90deg, #22d3ee, #a78bfa, #f472b6); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.carr-barra { width: min(420px, 70vw); height: 6px; border-radius: 6px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
+.carr-barra i { display: block; height: 100%; width: 0; border-radius: 6px; background: linear-gradient(90deg, #22d3ee, #8b5cf6, #f472b6); transition: width 0.25s ease; }
+.carr-texto { font-size: 14px; color: #9aa3c7; }
+#carregamento.erro .carr-texto { color: #fca5a5; max-width: 70vw; text-align: center; }
+@keyframes carr-pulso { 50% { transform: scale(1.06); } }

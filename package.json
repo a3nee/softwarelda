@@ -7,15 +7,59 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "app": "npm run build && node electron/lancar.mjs",
+    "app:dev": "node electron/lancar.mjs --dev",
+    "dist": "npm run build && electron-builder --win",
     "sim": "node src/simrun.ts && node src/simtest.ts && node src/simtest.ts --missoes",
     "simtest": "node src/simtest.ts"
   },
   "dependencies": {
+    "@dgreenheck/ez-tree": "^1.1.0",
     "three": "^0.187.0"
   },
   "devDependencies": {
     "@types/three": "^0.187.0",
+    "electron": "^45.3.4",
+    "electron-builder": "^26.18.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.8"
+  },
+  "description": "Jogo de gestão de uma empresa de software em 3D",
+  "author": "Software Lda",
+  "main": "electron/main.cjs",
+  "build": {
+    "appId": "pt.softwarelda.jogo",
+    "productName": "Software Lda",
+    "copyright": "Software Lda",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/main.cjs",
+      "electron/preload.cjs",
+      "electron/icone.png",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "electron/icone.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Software Lda",
+      "artifactName": "Software-Lda-Instalar-${version}.exe"
+    }
   }
 }

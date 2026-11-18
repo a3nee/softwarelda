@@ -15,9 +15,10 @@ import {
   type TipoObjeto, type TipoSoftware,
 } from './sim.ts';
 import {
-  animarBoneco, Confetes, corFelicidade, criarBoneco, criarCafe, criarMatraquilhos, criarPlanta, criarSecretaria,
-  criarSofa, MAT, mat, type Boneco,
+  CADEIRA_Z, Confetes, corFelicidade, criarCafe, criarMatraquilhos, criarPlanta, criarSecretaria, criarSofa, MAT, mat,
 } from './modelos.ts';
+import { ALTURA_INDICADOR, Pessoa } from './pessoas.ts';
+import { materialPBR, texturaNoMundo } from './recursos.ts';
 import { Ambiente } from './ambiente.ts';
 import { guardarDefinicoes, lerDefinicoes, pixelRatio, type Definicoes } from './definicoes.ts';
 import { configurarSom, som } from './som.ts';
@@ -123,7 +124,7 @@ renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.05;
+renderer.toneMappingExposure = 0.95;
 app.appendChild(renderer.domElement);
 
 const cena = new THREE.Scene();
@@ -158,48 +159,64 @@ function vistaDeMenu(): void {
   camara.setViewOffset(innerWidth, innerHeight, -innerWidth * 0.17, 0, innerWidth, innerHeight);
 }
 
-const ambiente = new Ambiente(cena, LARGURA, ALTURA, s.entrada);
+const ambiente = new Ambiente(cena, renderer, LARGURA, ALTURA, s.entrada);
 const confetes = new Confetes(cena);
 const particulas = new Particulas(cena);
 const posfx = new PosFx(renderer, cena, camara);
+posfx.excluirDaOclusao(particulas.grupo, confetes.malha);
 
-// Chão: uma instância por célula, para se poder colorir cada uma.
-const geoCelula = new THREE.PlaneGeometry(0.98, 0.98).rotateX(-Math.PI / 2);
-const chao = new THREE.InstancedMesh(geoCelula, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85 }), LARGURA * ALTURA);
-chao.receiveShadow = true;
-{
-  const m = new THREE.Matrix4();
-  for (let z = 0; z < ALTURA; z++)
-    for (let x = 0; x < LARGURA; x++) {
-      m.makeTranslation(x, 0, z);
-      chao.setMatrixAt(z * LARGURA + x, m);
-      chao.setColorAt(z * LARGURA + x, new THREE.Color(0xe4dfd5));
-    }
-}
-cena.add(chao);
+// Chão: betão polido no espaço aberto; soalho ou parquet nas salas (com um tom por sala).
+// Uma instância por célula em cada tipo de chão; a célula só aparece no tipo que lhe cabe.
+const geoCelula = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+const PISOS = [
+  texturaNoMundo(materialPBR('concrete_floor_worn_001', 1, { color: 0xf2f0ec, roughness: 0.5 }), 0.56, 0.12),
+  texturaNoMundo(materialPBR('laminate_floor_02', 1, { roughness: 0.5 }), 0.98),
+  texturaNoMundo(materialPBR('herringbone_parquet', 1, { roughness: 0.45 }), 0.49),
+].map((m) => {
+  const im = new THREE.InstancedMesh(geoCelula, m, LARGURA * ALTURA);
+  im.receiveShadow = true;
+  for (let i = 0; i < LARGURA * ALTURA; i++) im.setColorAt(i, new THREE.Color(0xffffff));
+  cena.add(im);
+  return im;
+});
 
-const COR_ABERTO = new THREE.Color(0xe4dfd5);
-// Alcatifas das salas: cores vivas, mas não berrantes
-const CORES_SALA = [0x7dd3fc, 0xf9a8d4, 0x86efac, 0xfde68a, 0xc4b5fd, 0xfdba74, 0x5eead4, 0xfca5a5].map((c) => new THREE.Color(c));
+// Tons das salas: leves, para o chão continuar a parecer madeira
+const CORES_SALA = [0x7dd3fc, 0xf9a8d4, 0x86efac, 0xfde68a, 0xc4b5fd, 0xfdba74, 0x5eead4, 0xfca5a5].map((c) =>
+  new THREE.Color(0xffffff).lerp(new THREE.Color(c), 0.16));
 let totalSalas = 0;
 
-/** Pinta o chão: cada sala fechada tem a sua cor, o espaço aberto fica claro. */
+/** Pinta o chão: cada sala fechada tem o seu chão e o seu tom, o espaço aberto fica em betão. */
 function pintarChao(): void {
   const salas = detetarSalas(s);
   totalSalas = salas.total;
-  const cor = new THREE.Color();
+  const m = new THREE.Matrix4();
+  const zero = new THREE.Matrix4().makeScale(0, 0, 0);
   salas.sala.forEach((n, i) => {
-    if (n < 0) cor.copy(COR_ABERTO);
-    else cor.copy(CORES_SALA[n % CORES_SALA.length]);
-    // Ligeiro xadrez, para o chão não parecer liso
-    if ((i + Math.floor(i / LARGURA)) % 2) cor.offsetHSL(0, 0, -0.025);
-    chao.setColorAt(i, cor);
+    const piso = n < 0 ? 0 : 1 + (n % 2);
+    m.makeTranslation(i % LARGURA, 0, Math.floor(i / LARGURA));
+    PISOS.forEach((im, k) => im.setMatrixAt(i, k === piso ? m : zero));
+    if (n >= 0) PISOS[piso].setColorAt(i, CORES_SALA[n % CORES_SALA.length]);
   });
-  chao.instanceColor!.needsUpdate = true;
+  for (const im of PISOS) {
+    im.instanceMatrix.needsUpdate = true;
+    im.instanceColor!.needsUpdate = true;
+    im.computeBoundingSphere();
+  }
 }
 
-// Marca da entrada: tapete verde do lado de dentro
-const entrada = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.02, 0.8), mat(0x16a34a, { roughness: 1 }));
+// Grelha (só aparece quando se constrói)
+const grelha = (() => {
+  const p: number[] = [];
+  for (let x = 0; x <= LARGURA; x++) p.push(x - 0.5, 0.004, -0.5, x - 0.5, 0.004, ALTURA - 0.5);
+  for (let z = 0; z <= ALTURA; z++) p.push(-0.5, 0.004, z - 0.5, LARGURA - 0.5, 0.004, z - 0.5);
+  const g = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(p, 3));
+  return new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.22, depthWrite: false }));
+})();
+grelha.visible = false;
+cena.add(grelha);
+
+// Marca da entrada: capacho do lado de dentro
+const entrada = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.012, 0.8), mat(0x2f2a26, { roughness: 1 }));
 entrada.position.set(s.entrada.x, 0.01, s.entrada.z);
 entrada.receiveShadow = true;
 cena.add(entrada);
@@ -234,16 +251,16 @@ function criarObjeto(tipo: TipoObjeto, id: number): THREE.Group {
 }
 
 // Paredes e portas
-const ALTURA_PAREDE = 1.1;
+const ALTURA_PAREDE = 1.38; // ≈ 2,3 m (as paredes viradas para a câmara baixam, ver cortarParedes)
 const ESPESSURA = 0.1;
 const geoParede = new THREE.BoxGeometry(1 + ESPESSURA, ALTURA_PAREDE, ESPESSURA);
 const geoOmbreira = new THREE.BoxGeometry(0.1, ALTURA_PAREDE, ESPESSURA + 0.04);
 const geoVerga = new THREE.BoxGeometry(1, 0.16, ESPESSURA);
 const geoFolha = new THREE.BoxGeometry(0.8, ALTURA_PAREDE - 0.2, 0.04);
-const matParede = mat(0xf7f4ee, { roughness: 0.7 });
-const matTopoParede = mat(0x475069, { roughness: 0.6 });
+const matParede = materialPBR('painted_plaster_wall', [0.55, 0.6], { color: 0xf3f0ea, roughness: 0.9 });
+const matTopoParede = mat(0x2d3038, { roughness: 0.7 });
 const geoTopoParede = new THREE.BoxGeometry(1 + ESPESSURA, 0.04, ESPESSURA + 0.02);
-const matFolha = mat(0x7dd3fc, { transparent: true, opacity: 0.35, roughness: 0.1, metalness: 0.1 });
+const matFolha = mat(0xcfe6f0, { transparent: true, opacity: 0.3, roughness: 0.04, metalness: 0.4, depthWrite: false });
 const matFantasma = new THREE.MeshBasicMaterial({ color: 0x6fd68b, transparent: true, opacity: 0.45, depthWrite: false });
 const matFantasmaMau = new THREE.MeshBasicMaterial({ color: 0xff6b6b, transparent: true, opacity: 0.45, depthWrite: false });
 
@@ -283,12 +300,37 @@ function todasAsArestas(): Aresta[] {
 }
 const ARESTAS = todasAsArestas();
 
+/** Paredes e portas desenhadas, para as baixar quando estão entre a câmara e o que se está a ver. */
+interface Parede3D { o: THREE.Object3D; topo: THREE.Object3D | null; x: number; z: number; tipo: 'v' | 'h'; porta: boolean; f: number }
+const paredes3D: Parede3D[] = [];
+const ALTURA_CORTADA = 0.16; // fração da altura que fica (um murete)
+
+function cortarParedes(dt: number): void {
+  const t = controlos.target;
+  const c = camara.position;
+  const n = Math.hypot(c.x - t.x, c.z - t.z) || 1;
+  const dx = (c.x - t.x) / n;
+  const dz = (c.z - t.z) / n;
+  const k = Math.min(1, dt * 9);
+  for (const p of paredes3D) {
+    const doLadoDaCamara = (p.x - t.x) * dx + (p.z - t.z) * dz > -0.8;
+    const virada = p.tipo === 'h' ? Math.abs(dz) > 0.3 : Math.abs(dx) > 0.3;
+    const alvo = doLadoDaCamara && virada ? ALTURA_CORTADA : 1;
+    if (Math.abs(p.f - alvo) < 0.002) continue;
+    p.f += (alvo - p.f) * k;
+    p.o.scale.y = p.f;
+    if (!p.porta) p.o.position.y = (ALTURA_PAREDE * p.f) / 2;
+    if (p.topo) p.topo.position.y = ALTURA_PAREDE * p.f + 0.02;
+  }
+}
+
 let versaoDesenhada = -1;
 function sincronizarMapa(): void {
   if (versaoDesenhada === s.versaoMapa) return;
   versaoDesenhada = s.versaoMapa;
   grupoMapa.clear();
   ecras.clear();
+  paredes3D.length = 0;
   for (const d of s.secretarias) {
     const m = criarSecretaria(d.id);
     m.grupo.position.set(d.x, 0, d.z);
@@ -307,6 +349,7 @@ function sincronizarMapa(): void {
       const p = criarPorta();
       colocarNaAresta(p, a);
       grupoMapa.add(p);
+      paredes3D.push({ o: p, topo: null, x: p.position.x, z: p.position.z, tipo: a.tipo, porta: true, f: 1 });
     } else {
       const m = new THREE.Mesh(geoParede, matParede);
       m.castShadow = m.receiveShadow = true;
@@ -315,6 +358,7 @@ function sincronizarMapa(): void {
       const topo = new THREE.Mesh(geoTopoParede, matTopoParede);
       colocarNaAresta(topo, a, ALTURA_PAREDE + 0.02);
       grupoMapa.add(topo);
+      paredes3D.push({ o: m, topo, x: m.position.x, z: m.position.z, tipo: a.tipo, porta: false, f: 1 });
     }
   }
   pintarChao();
@@ -368,7 +412,7 @@ function mostrarModelo(chave: string, x: number, z: number, valido: boolean): vo
 // Funcionários
 // ---------------------------------------------------------------------------
 
-const bonecos = new Map<number, Boneco>();
+const bonecos = new Map<number, Pessoa>();
 const idDoGrupo = new WeakMap<THREE.Object3D, number>();
 let selecionado: number | null = null;
 
@@ -392,7 +436,7 @@ function sincronizarFuncionarios(dt: number, agora: number): void {
     vivos.add(f.id);
     let b = bonecos.get(f.id);
     if (!b) {
-      b = criarBoneco(f.id, especialidade(f));
+      b = new Pessoa(f.id, f.nome);
       b.grupo.position.set(f.x, 0, f.z);
       cena.add(b.grupo);
       bonecos.set(f.id, b);
@@ -409,7 +453,7 @@ function sincronizarFuncionarios(dt: number, agora: number): void {
     g.visible = true;
     const sentado = f.estado === 'aTrabalhar';
     const alvoX = f.x;
-    const alvoZ = f.z + (sentado ? 0.34 : 0);
+    const alvoZ = f.z + (sentado ? CADEIRA_Z : 0);
     if (acabouDeEntrar) g.position.set(alvoX, 0, alvoZ);
     const dx = alvoX - g.position.x;
     const dz = alvoZ - g.position.z;
@@ -423,10 +467,12 @@ function sincronizarFuncionarios(dt: number, agora: number): void {
     d = Math.atan2(Math.sin(d), Math.cos(d));
     g.rotation.y += d * Math.min(1, dt * 12);
     const anda = aAndar || f.estado === 'aCaminho' || f.estado === 'aSair';
-    animarBoneco(b, sentado ? 'sentado' : anda ? 'andar' : 'parado', agora / 1000 + f.id);
+    const veloc = dt > 0 ? (Math.hypot(dx, dz) * k) / dt : 0;
+    const aEscrever = sentado && horario && f.secretariaId !== null && f.projetoId !== null;
+    b.atualizar(dt, sentado ? 'trabalhar' : anda ? 'andar' : 'parado', veloc, aEscrever);
     // Indicador de felicidade por cima da cabeça
     b.indicador.visible = def.indicadores || f.id === selecionado;
-    b.indicador.position.y = (sentado ? 1.2 : 1.12) + Math.sin(agora / 400 + f.id) * 0.03;
+    b.indicador.position.y = (sentado ? ALTURA_INDICADOR.sentado : ALTURA_INDICADOR.pe) + Math.sin(agora / 400 + f.id) * 0.02;
     b.indicador.rotation.y = agora / 700 + f.id;
     const mi = b.indicador.material as THREE.MeshStandardMaterial;
     corFelicidade(f.felicidade, mi.color);
@@ -1293,6 +1339,7 @@ function processarMensagensNovas(): void {
     if (vistas.has(m)) continue;
     vistas.add(m);
     if (m.tipo === 'lancamento' || m.tipo === 'conquista' || m.tipo === 'nivel') confetes.disparar(centroDoEscritorio());
+    if (m.tipo === 'lancamento') for (const b of bonecos.values()) b.festejar(4);
     if (montra) continue;
     const t = m.tipo ?? 'info';
     if (t === 'mes') {
@@ -1487,6 +1534,7 @@ function aplicarDefinicoes(): void {
   renderer.setPixelRatio(pixelRatio(def.qualidade));
   renderer.setSize(innerWidth, innerHeight);
   ambiente.sombras = def.sombras;
+  ambiente.qualidade(def.qualidade);
   configurarSom(def.sons, def.volume);
   posfx.definir(def.qualidade === 'alta' ? 'completo' : def.qualidade === 'media' ? 'acabamento' : 'nenhum');
   posfx.redimensionar(innerWidth, innerHeight, pixelRatio(def.qualidade));
@@ -1641,6 +1689,8 @@ function ciclo(agora: number): void {
   sincronizarFuncionarios(dt, agora);
   processarMensagensNovas();
   moverCamara(dt);
+  grelha.visible = !montra && ferramenta !== 'selecionar';
+  cortarParedes(dt);
   ambiente.atualizar(dt, minutoDoDia(s) + acumulado, def.cicloDia);
   confetes.atualizar(dt);
   emitirTrabalho(dt);
@@ -1669,6 +1719,7 @@ if (import.meta.env.DEV) {
   Object.assign(window, {
     __jogo: s,
     __camara: camara,
+    __renderer: renderer,
     __controlos: controlos,
     __ecra: (vx: number, vz: number) => {
       const v = new THREE.Vector3(vx - 0.5, 0, vz - 0.5).project(camara);

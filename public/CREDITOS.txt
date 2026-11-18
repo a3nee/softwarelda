@@ -1,0 +1,18 @@
+Software Lda — créditos dos recursos 3D
+
+Potted Plant 02 — Rico Cilliers — Poly Haven, CC0 (modelos/potted_plant_02)
+Potted Plant 04 — James Ray Cock — Poly Haven, CC0 (modelos/potted_plant_04)
+Coffee Cart 01 — Joe Seabuhr — Poly Haven, CC0 (modelos/CoffeeCart_01)
+Street Lamp 01 — Josh Dean — Poly Haven, CC0 (modelos/street_lamp_01)
+Laminate Floor 02 — Dario Barresi, Charlotte Baglioni — Poly Haven, CC0 (texturas/laminate_floor_02)
+Herringbone Parquet — Jenelle van Heerden, Sergej Majboroda — Poly Haven, CC0 (texturas/herringbone_parquet)
+Concrete Floor Worn 001 — Dimitrios Savva, Rico Cilliers — Poly Haven, CC0 (texturas/concrete_floor_worn_001)
+Painted Plaster Wall — Amal Kumar — Poly Haven, CC0 (texturas/painted_plaster_wall)
+Leafy Grass — Charlotte Baglioni — Poly Haven, CC0 (texturas/leafy_grass)
+Asphalt 02 — Rob Tuytel — Poly Haven, CC0 (texturas/asphalt_02)
+Pavement 04 — Jan Burghardt — Poly Haven, CC0 (texturas/pavement_04)
+Brick Wall 001 — Rob Tuytel, Dimitrios Savva — Poly Haven, CC0 (texturas/brick_wall_001)
+Concrete Wall 006 — Dario Barresi, Charlotte Baglioni — Poly Haven, CC0 (texturas/concrete_wall_006)
+Ash Veneer — Jenelle van Heerden — Poly Haven, CC0 (texturas/ash_veneer)
+GlamVelvetSofa — Eric Chadwick (Wayfair), CC-BY 4.0 — Khronos glTF Sample Assets (modelos/GlamVelvetSofa)
+Pessoas e animações — Microsoft Rocketbox Avatar Library, licença MIT (modelos/pessoas, ver LICENCA-Rocketbox.txt)
