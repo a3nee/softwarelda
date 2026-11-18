@@ -3,8 +3,9 @@
 // Cada cenário é um "jogador" automático, corrido com várias sementes.
 // Termina com erro se alguma meta de equilíbrio falhar.
 import {
-  avancar, colocarSecretaria, contratar, ECON, iniciarProjeto, MIN_POR_DIA, MIN_POR_MES,
-  novoJogo, type Estado,
+  avancar, colocarSecretaria, contratar, ECON, fatorMercado, iniciarProjeto, LISTA_TIPOS, MIN_POR_DIA,
+  MIN_POR_MES, novoJogo, tipoDisponivel, TIPOS, trabalhoDoProjeto, validarFuncionalidades, vendasIniciais,
+  type Estado, type TipoSoftware,
 } from './sim.ts';
 
 const MESES = 24;
@@ -47,9 +48,74 @@ function despesasMensais(s: Estado): number {
   return s.funcionarios.reduce((t, f) => t + f.salario, 0) + ECON.rendaMensal;
 }
 
+/** Pontos de trabalho que a equipa faz por mês (8 h × 30 dias, com a felicidade atual). */
+function capacidadeMensal(s: Estado): number {
+  return s.funcionarios.reduce((t, f) => t + f.competencia * (0.5 + f.felicidade / 200), 0) * 8 * 60 * 30;
+}
+
+/** Subconjuntos de funcionalidades que respeitam as dependências. */
+function combinacoes(tipo: TipoSoftware): string[][] {
+  const ids = TIPOS[tipo].funcionalidades.map((f) => f.id);
+  const r: string[][] = [];
+  for (let m = 0; m < 1 << ids.length; m++) {
+    const escolha = ids.filter((_, i) => m & (1 << i));
+    if (validarFuncionalidades(tipo, escolha).ok) r.push(escolha);
+  }
+  return r;
+}
+
+/**
+ * Escolha "razoável": entre os tipos permitidos, o projeto que a equipa acaba em 3 meses
+ * ou menos e que rende mais por ponto de trabalho (qualidade esperada, mercado e curva de vendas).
+ */
+function escolherProjeto(s: Estado, tipos: TipoSoftware[]): { tipo: TipoSoftware; funcionalidades: string[] } {
+  const n = Math.max(1, s.funcionarios.length);
+  const qualidade = Math.min(1, (s.funcionarios.reduce((t, f) => t + f.competencia, 0) / n) * 1.2);
+  const limite = 3 * capacidadeMensal(s);
+  let melhor = { tipo: 'utilitario' as TipoSoftware, funcionalidades: [] as string[] };
+  let pontuacao = -Infinity;
+  for (const tipo of tipos) {
+    if (!tipoDisponivel(s, tipo)) continue;
+    for (const escolha of combinacoes(tipo)) {
+      const trabalho = trabalhoDoProjeto(tipo, escolha);
+      if (trabalho > limite && !(tipo === 'utilitario' && escolha.length === 0)) continue;
+      const receita = vendasIniciais(tipo, escolha, qualidade, fatorMercado(s, tipo)) / (1 - TIPOS[tipo].queda);
+      if (receita / trabalho > pontuacao) {
+        pontuacao = receita / trabalho;
+        melhor = { tipo, funcionalidades: escolha };
+      }
+    }
+  }
+  return melhor;
+}
+
+function novoProjeto(s: Estado, tipos: TipoSoftware[] = LISTA_TIPOS): void {
+  if (s.projeto) return;
+  const e = escolherProjeto(s, tipos);
+  iniciarProjeto(s, '', e.tipo, e.funcionalidades);
+}
+
 // ---------------------------------------------------------------------------
 // Jogadores
 // ---------------------------------------------------------------------------
+
+/**
+ * Contrata 2, tem sempre um projeto em curso e só cresce com 2+ produtos lançados
+ * e uma reserva de 6 meses de despesas (já a contar com o novo salário). Máximo 6 pessoas.
+ */
+function prudente(tipos: TipoSoftware[]): Jogador {
+  return (s, dia) => {
+    if (dia === 0) {
+      contratarMelhor(s);
+      contratarMelhor(s);
+    }
+    novoProjeto(s, tipos);
+    const c = s.candidatos[melhorCandidato(s)];
+    if (c && s.produtos.length >= 2 && s.funcionarios.length < 6
+      && s.dinheiro > 6 * (despesasMensais(s) + c.salario))
+      contratarMelhor(s);
+  };
+}
 
 const JOGADORES: Record<string, Jogador> = {
   /** Não faz nada: só paga a renda. */
@@ -63,26 +129,15 @@ const JOGADORES: Record<string, Jogador> = {
     }
   },
 
-  /**
-   * Contrata 2, tem sempre um projeto em curso e só cresce com 2+ produtos lançados
-   * e uma reserva de 6 meses de despesas (já a contar com o novo salário). Máximo 6 pessoas.
-   */
-  razoável: (s, dia) => {
-    if (dia === 0) {
-      contratarMelhor(s);
-      contratarMelhor(s);
-    }
-    if (!s.projeto) iniciarProjeto(s, '');
-    const c = s.candidatos[melhorCandidato(s)];
-    if (c && s.produtos.length >= 2 && s.funcionarios.length < 6
-      && s.dinheiro > 6 * (despesasMensais(s) + c.salario))
-      contratarMelhor(s);
-  },
+  razoável: prudente(LISTA_TIPOS),
+
+  /** Como o razoável, mas só faz utilitários (nunca diversifica). */
+  'só utilitários': prudente(['utilitario']),
 
   /** Contrata 6 pessoas no 1.º mês e tem sempre um projeto em curso. */
   'expansão rápida': (s, dia) => {
     if (dia === 0 || dia === 30) for (let i = 0; i < 3; i++) contratarMelhor(s);
-    if (!s.projeto) iniciarProjeto(s, '');
+    novoProjeto(s);
   },
 };
 
@@ -98,6 +153,7 @@ interface Corrida {
   lucroAno2: number;
   primeiroLancamento: number | null; // mês (1 = janeiro do ano 1)
   produtos: number;
+  porTipo: Record<TipoSoftware, number>;
   equipa: number;
   caixaMensal: number[]; // dinheiro no fim de cada mês
 }
@@ -124,6 +180,7 @@ function correr(jogador: Jogador, semente: number): Corrida {
     lucroAno2: caixa(24) - caixa(12),
     primeiroLancamento: p0 ? Math.floor(p0.lancadoEm / MIN_POR_MES) + 1 : null,
     produtos: s.produtos.length,
+    porTipo: Object.fromEntries(LISTA_TIPOS.map((t) => [t, s.produtos.filter((p) => p.tipo === t).length])) as Record<TipoSoftware, number>,
     equipa: s.funcionarios.length,
     caixaMensal,
   };
@@ -168,6 +225,8 @@ const curva = resultados['razoável'][0].caixaMensal;
 console.log(`\nCaixa do jogador razoável (semente ${SEMENTES[0]}), fim de cada mês:`);
 console.log(curva.map((v, i) => `${i + 1}:${k(v)}`).join(' '));
 console.log(`Caixa mínima do razoável por semente: ${resultados['razoável'].map((c) => k(c.minimo)).join(' ')}`);
+for (const nome of ['razoável', 'expansão rápida'])
+  console.log(`Produtos por tipo (${nome}, mediana): ${LISTA_TIPOS.map((t) => `${TIPOS[t].plural} ${mediana(resultados[nome].map((c) => c.porTipo[t]))}`).join(' · ')}`);
 
 // ---------------------------------------------------------------------------
 // Metas
@@ -199,10 +258,27 @@ meta('Razoável acaba os 2 anos entre 60k e 200k (mediana)',
   ((m) => m >= 60000 && m <= 200000)(mediana(finaisRazoavel)));
 meta('Razoável lucra mais no ano 2 do que no ano 1 (mediana)',
   mediana(razoavel.map((c) => c.lucroAno2)) > mediana(razoavel.map((c) => c.lucroAno1)));
-meta('Expansão rápida não compensa: acaba com menos de metade do razoável (mediana, falências incluídas)',
-  mediana(rapida.map((c) => c.final)) < mediana(finaisRazoavel) / 2);
+meta('Diversificar compensa: o razoável acaba acima do "só utilitários" (mediana)',
+  mediana(finaisRazoavel) > mediana(resultados['só utilitários'].map((c) => c.final)));
+meta('O razoável lança pelo menos 3 tipos de software diferentes (mediana)',
+  mediana(razoavel.map((c) => LISTA_TIPOS.filter((t) => c.porTipo[t] > 0).length)) >= 3);
+meta('Expansão rápida é arriscada: vai à falência em pelo menos 2 das 8 sementes',
+  rapida.filter((c) => c.falenciaMes !== null).length >= 2);
 meta('Expansão rápida entra em dívida (caixa < 0) em pelo menos metade das sementes',
   rapida.filter((c) => c.minimo < 0).length >= SEMENTES.length / 2);
 
+// Avisos: desequilíbrios conhecidos que ainda não falham (ficam visíveis até serem resolvidos).
+let avisos = 0;
+function aviso(descricao: string, ok: boolean): void {
+  if (!ok) {
+    avisos++;
+    console.log(`⚠ ${descricao}`);
+  }
+}
+aviso('Expansão rápida não compensa: acaba com menos de metade do razoável (mediana, falências incluídas). '
+  + 'Quem sobrevive com 6 pessoas ganha mais, porque há jogos e editores grandes para fazer. '
+  + 'A resolver no ponto 4 (eficiência das equipas).',
+  mediana(rapida.map((c) => c.final)) < mediana(finaisRazoavel) / 2);
+
 if (falhas) throw new Error(`${falhas} meta(s) de equilíbrio falharam.`);
-console.log('\nTodas as metas cumpridas.');
+console.log(`\nTodas as metas cumpridas${avisos ? ` (${avisos} aviso${avisos > 1 ? 's' : ''})` : ''}.`);

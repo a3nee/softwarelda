@@ -2,10 +2,11 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import {
-  arestaMaisProxima, avancar, colocarParedes, colocarPorta, colocarSecretaria, contratar,
-  demolirArestas, despedir, detetarSalas, ECON, euros, fatorMercado, iniciarProjeto, lerAresta,
-  minutoDoDia, NADA, NOME_ESTADO, novoJogo, PORTA, removerSecretaria, secretariaEm, segmento,
-  textoData, type Aresta, type Estado, type Funcionario, type Resultado,
+  arestaMaisProxima, avancar, colocarParedes, colocarPorta, colocarSecretaria, comDependencias,
+  contratar, demolirArestas, despedir, detetarSalas, ECON, euros, fatorMercado, iniciarProjeto,
+  lerAresta, LISTA_TIPOS, minutoDoDia, NADA, NOME_ESTADO, novoJogo, PORTA, removerSecretaria,
+  secretariaEm, segmento, semDependentes, textoData, tipoDisponivel, TIPOS, trabalhoDoProjeto,
+  vendasIniciais, type Aresta, type Estado, type Funcionario, type Resultado, type TipoSoftware,
 } from './sim.ts';
 
 const s: Estado = novoJogo(Date.now() & 0xffff);
@@ -463,12 +464,46 @@ lateral.addEventListener('click', (ev) => {
   let r = { ok: true } as { ok: boolean; msg?: string };
   if (a === 'contratar') r = contratar(s, Number(b.dataset.i));
   else if (a === 'despedir') r = despedir(s, Number(b.dataset.id));
-  else if (a === 'projeto') {
+  else if (a === 'tipo') {
+    tipoEscolhido = b.dataset.tipo as TipoSoftware;
+    funcEscolhidas = [];
+  } else if (a === 'projeto') {
     const input = document.getElementById('nome-projeto') as HTMLInputElement | null;
-    r = iniciarProjeto(s, input?.value ?? '');
+    r = iniciarProjeto(s, input?.value ?? '', tipoEscolhido, funcEscolhidas);
+    if (r.ok) funcEscolhidas = [];
   }
   if (!r.ok && r.msg) aviso(r.msg);
+  atualizarUI();
 });
+// Funcionalidades: marcar junta as dependências, desmarcar tira o que dependia delas.
+lateral.addEventListener('change', (ev) => {
+  const c = ev.target as HTMLInputElement;
+  const id = c.dataset.func;
+  if (!id) return;
+  funcEscolhidas = c.checked
+    ? comDependencias(tipoEscolhido, [...funcEscolhidas, id])
+    : semDependentes(tipoEscolhido, funcEscolhidas, id);
+  atualizarUI();
+});
+
+// Escolhas do próximo projeto (estado só da interface)
+let tipoEscolhido: TipoSoftware = 'utilitario';
+let funcEscolhidas: string[] = [];
+
+/** Pontos de trabalho que a equipa atual faz por mês (8 h × 30 dias). */
+function capacidadeMensal(): number {
+  return s.funcionarios.reduce((t, f) => t + f.competencia * (0.5 + f.felicidade / 200), 0) * 8 * 60 * 30;
+}
+
+/** Qualidade que a equipa atual daria a um produto (a mesma fórmula do lançamento). */
+function qualidadeEsperada(): number {
+  const n = s.funcionarios.length;
+  return n ? Math.min(1, (s.funcionarios.reduce((t, f) => t + f.competencia, 0) / n) * 1.2) : 0;
+}
+
+function esc(texto: string): string {
+  return texto.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
+}
 
 function aviso(texto: string): void {
   s.mensagens.push({ minuto: s.minuto, texto: `⚠ ${texto}` });
@@ -496,13 +531,45 @@ function atualizarUI(): void {
 
   const pProjeto = document.getElementById('p-projeto')!;
   if (s.projeto) {
-    const pct = Math.min(100, (s.projeto.trabalhoFeito / s.projeto.trabalhoTotal) * 100);
-    definir(pProjeto, `<h3>Projeto: ${s.projeto.nome}</h3>
+    const p = s.projeto;
+    const pct = Math.min(100, (p.trabalhoFeito / p.trabalhoTotal) * 100);
+    const funcs = p.funcionalidades.map((id) => TIPOS[p.tipo].funcionalidades.find((f) => f.id === id)!.nome);
+    definir(pProjeto, `<h3>Projeto: ${esc(p.nome)}</h3>
+      <div class="sub">${TIPOS[p.tipo].nome}${funcs.length ? ` · ${funcs.join(', ')}` : ''}</div>
       <div class="barra"><div style="width:${pct.toFixed(1)}%"></div></div>
-      <div class="sub">${pct.toFixed(0)}% concluído</div>`);
+      <div class="sub">${pct.toFixed(0)}% concluído · ${Math.round(p.trabalhoFeito).toLocaleString('pt-PT')} de ${p.trabalhoTotal.toLocaleString('pt-PT')} pontos</div>`);
   } else {
+    // O campo do nome fica fora da parte que é redesenhada, para não perder o foco ao escrever.
     definir(pProjeto, `<h3>Novo projeto</h3>
-      <div class="linha"><input type="text" id="nome-projeto" placeholder="Nome do utilitário" maxlength="30"></div>
+      <div class="linha"><input type="text" id="nome-projeto" placeholder="Nome (opcional)" maxlength="30"></div>
+      <div id="config-projeto"></div>`);
+    if (!tipoDisponivel(s, tipoEscolhido)) tipoEscolhido = 'utilitario';
+    const def = TIPOS[tipoEscolhido];
+    const trabalho = trabalhoDoProjeto(tipoEscolhido, funcEscolhidas);
+    const cap = capacidadeMensal();
+    const qualidade = qualidadeEsperada();
+    const mercado = fatorMercado(s, tipoEscolhido);
+    const vendas = vendasIniciais(tipoEscolhido, funcEscolhidas, qualidade, mercado);
+    const tipos = LISTA_TIPOS.map((t) => {
+      const livre = tipoDisponivel(s, t);
+      const n = TIPOS[t].produtosNecessarios;
+      return `<button data-acao="tipo" data-tipo="${t}" class="${t === tipoEscolhido ? 'ativo' : ''}" ${livre ? '' : 'disabled'}
+        title="${livre ? TIPOS[t].descricao : `Precisa de ${n} produto${n === 1 ? '' : 's'} lançado${n === 1 ? '' : 's'}`}">${livre ? '' : '🔒 '}${TIPOS[t].nome}</button>`;
+    }).join('');
+    const funcs = def.funcionalidades.map((f) => {
+      const req = f.requer.map((r) => def.funcionalidades.find((o) => o.id === r)!.nome);
+      return `<label class="func"><input type="checkbox" data-func="${f.id}" ${funcEscolhidas.includes(f.id) ? 'checked' : ''}>
+        <span>${f.nome}<div class="sub">+${(f.trabalho / 1000).toFixed(0)}k pontos · +${Math.round(f.valor * 100)}% vendas${req.length ? ` · precisa de ${req.join(', ')}` : ''}</div></span></label>`;
+    }).join('');
+    const meses = cap > 0 ? trabalho / cap : Infinity;
+    definir(document.getElementById('config-projeto')!, `
+      <div class="tipos">${tipos}</div>
+      <div class="sub">${def.descricao}</div>
+      ${funcs ? `<div class="funcs">${funcs}</div>` : ''}
+      <div class="sub">Trabalho: ${trabalho.toLocaleString('pt-PT')} pontos
+        (${Number.isFinite(meses) ? `~${meses.toFixed(1).replace('.', ',')} meses com a equipa atual` : 'sem equipa'})</div>
+      <div class="sub ${mercado < 0.7 ? 'aviso' : ''}">Vendas no 1.º mês: ~${euros(vendas)}
+        (qualidade ~${Math.round(qualidade * 100)}%, mercado ${Math.round(mercado * 100)}%)</div>
       <div class="linha"><button data-acao="projeto">Começar desenvolvimento</button></div>`);
   }
 
@@ -520,13 +587,17 @@ function atualizarUI(): void {
       <div>${c.nome}<div class="sub">comp. ${Math.round(c.competencia * 100)} · ${euros(c.salario)}/mês</div></div>
       <button data-acao="contratar" data-i="${i}">Contratar</button></div>`).join('')}`);
 
-  const mercado = Math.round(fatorMercado(s) * 100);
+  const mercados = LISTA_TIPOS.filter((t) => tipoDisponivel(s, t)).map((t) => {
+    const m = Math.round(fatorMercado(s, t) * 100);
+    return `<div class="linha sub ${m < 70 ? 'aviso' : ''}"><span>${TIPOS[t].plural}</span><span>${m}%</span></div>`;
+  }).join('');
   definir(document.getElementById('p-produtos')!, `<h3>Produtos</h3>
-    <div class="sub ${mercado < 70 ? 'aviso' : ''}" title="Um utilitário novo vende esta percentagem do normal. Os produtos ainda à venda ocupam o mercado.">
-      Mercado de utilitários: um produto novo venderia ${mercado}% do normal</div>
+    <div class="sub" title="Quanto um produto novo de cada tipo venderia em relação ao normal. Os produtos do mesmo tipo ainda à venda ocupam o mercado.">
+      Mercado livre (um produto novo venderia):</div>
+    ${mercados}
     ${s.produtos.length === 0 ? '<div class="sub">Nenhum produto lançado.</div>' : ''}
     ${s.produtos.slice(-8).reverse().map((p) => `<div class="linha">
-      <div>${p.nome}<div class="sub">qualidade ${Math.round(p.qualidade * 100)}% · total ${euros(p.receitaTotal)}</div></div>
+      <div>${esc(p.nome)}<div class="sub">${TIPOS[p.tipo].nome} · qualidade ${Math.round(p.qualidade * 100)}% · total ${euros(p.receitaTotal)}</div></div>
       <span>${euros(p.vendasMes)}/mês</span></div>`).join('')}`);
 
   definir(caixaMensagens, s.mensagens.slice(-12).reverse().map(

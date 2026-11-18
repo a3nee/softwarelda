@@ -25,3 +25,8 @@ h3 { margin: 0 0 6px; font-size: 14px; }
 input[type=text] { background: #11141f; color: #eef; border: 1px solid #4a5378; border-radius: 6px; padding: 5px 8px; font: inherit; width: 100%; }
 .aviso { color: #ffb86b; }
 #fim { inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.6); font-size: 28px; }
+.tipos { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 6px; }
+.tipos button { padding: 4px 7px; font-size: 12px; }
+.funcs { margin: 6px 0; display: flex; flex-direction: column; gap: 4px; }
+label.func { display: flex; gap: 6px; align-items: flex-start; cursor: pointer; }
+label.func input { margin-top: 3px; }

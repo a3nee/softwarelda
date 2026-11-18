@@ -19,7 +19,7 @@ export const MESES = [
 ];
 
 // ---------------------------------------------------------------------------
-// Economia (valores provisórios; o equilíbrio fica para o objetivo 2)
+// Economia (afinada com `npm run simtest`)
 // ---------------------------------------------------------------------------
 
 export const ECON = {
@@ -31,11 +31,157 @@ export const ECON = {
   limiteFalencia: -10000,
   salarioBase: 1000, // salário = salarioBase + competência × salarioPorCompetencia
   salarioPorCompetencia: 2500,
-  trabalhoProjeto: 30000, // pontos de trabalho de um utilitário (~2 meses com 2 pessoas)
-  vendasBase: 8000, // € no 1.º mês para qualidade 1, com o mercado livre
-  quedaVendas: 0.8, // vendas do mês seguinte = vendas * quedaVendas
-  saturacao: 0.8, // vendas de um produto novo ÷ (1 + saturacao × ocupação do mercado)
+  saturacao: 0.8, // vendas de um produto novo ÷ (1 + saturacao × ocupação do mercado do seu tipo)
 };
+
+// ---------------------------------------------------------------------------
+// Tipos de software e funcionalidades
+// ---------------------------------------------------------------------------
+
+export type TipoSoftware = 'utilitario' | 'editor' | 'antivirus' | 'jogo';
+
+export interface Funcionalidade {
+  id: string;
+  nome: string;
+  trabalho: number; // pontos de trabalho a mais
+  valor: number; // vendas × (1 + Σ valor)
+  requer: string[]; // ids de funcionalidades do mesmo tipo que têm de ser incluídas também
+}
+
+export interface DefTipo {
+  nome: string; // singular
+  plural: string;
+  descricao: string;
+  produtosNecessarios: number; // produtos lançados para desbloquear
+  trabalho: number; // pontos de trabalho da versão base (2 pessoas fazem ~13 000 por mês)
+  vendas: number; // € no 1.º mês com qualidade 100%, sem funcionalidades e com o mercado livre
+  queda: number; // vendas do mês seguinte = vendas × queda
+  exigencia: number; // vendas × qualidade^exigencia (os jogos castigam mais a falta de qualidade)
+  funcionalidades: Funcionalidade[];
+}
+
+export const TIPOS: Record<TipoSoftware, DefTipo> = {
+  utilitario: {
+    nome: 'Utilitário',
+    plural: 'Utilitários',
+    descricao: 'Pequeno e rápido de fazer. Vendas modestas, que caem depressa.',
+    produtosNecessarios: 0,
+    trabalho: 20000,
+    vendas: 6000,
+    queda: 0.8,
+    exigencia: 1,
+    funcionalidades: [
+      { id: 'grafica', nome: 'Interface gráfica', trabalho: 6000, valor: 0.25, requer: [] },
+      { id: 'agendamento', nome: 'Tarefas agendadas', trabalho: 5000, valor: 0.2, requer: ['grafica'] },
+      { id: 'comandos', nome: 'Linha de comandos', trabalho: 3000, valor: 0.1, requer: [] },
+    ],
+  },
+  editor: {
+    nome: 'Editor de texto',
+    plural: 'Editores de texto',
+    descricao: 'Mais trabalho, mas continua a vender durante muito tempo.',
+    produtosNecessarios: 1,
+    trabalho: 35000,
+    vendas: 4900,
+    queda: 0.85,
+    exigencia: 1,
+    funcionalidades: [
+      { id: 'corretor', nome: 'Corretor ortográfico', trabalho: 8000, valor: 0.3, requer: [] },
+      { id: 'formatacao', nome: 'Formatação rica', trabalho: 10000, valor: 0.35, requer: [] },
+      { id: 'tabelas', nome: 'Tabelas', trabalho: 8000, valor: 0.25, requer: ['formatacao'] },
+      { id: 'nuvem', nome: 'Colaboração na nuvem', trabalho: 15000, valor: 0.4, requer: ['formatacao'] },
+    ],
+  },
+  antivirus: {
+    nome: 'Antivírus',
+    plural: 'Antivírus',
+    descricao: 'Vendas baixas no lançamento, mas os clientes ficam: as vendas quase não caem.',
+    produtosNecessarios: 2,
+    trabalho: 40000,
+    vendas: 3300,
+    queda: 0.9,
+    exigencia: 1,
+    funcionalidades: [
+      { id: 'temporeal', nome: 'Proteção em tempo real', trabalho: 12000, valor: 0.4, requer: [] },
+      { id: 'firewall', nome: 'Firewall', trabalho: 10000, valor: 0.3, requer: ['temporeal'] },
+      { id: 'atualizacoes', nome: 'Atualizações automáticas', trabalho: 6000, valor: 0.2, requer: [] },
+    ],
+  },
+  jogo: {
+    nome: 'Jogo',
+    plural: 'Jogos',
+    descricao: 'Muito trabalho e vendas fortes, mas só no início. Exige uma equipa competente.',
+    produtosNecessarios: 3,
+    trabalho: 50000,
+    vendas: 19500,
+    queda: 0.6,
+    exigencia: 1.5,
+    funcionalidades: [
+      { id: 'graficos3d', nome: 'Gráficos 3D', trabalho: 20000, valor: 0.5, requer: [] },
+      { id: 'historia', nome: 'Modo história', trabalho: 12000, valor: 0.3, requer: [] },
+      { id: 'multijogador', nome: 'Multijogador', trabalho: 18000, valor: 0.45, requer: [] },
+      { id: 'classificacoes', nome: 'Classificações online', trabalho: 6000, valor: 0.2, requer: ['multijogador'] },
+    ],
+  },
+};
+
+export const LISTA_TIPOS = Object.keys(TIPOS) as TipoSoftware[];
+
+function funcionalidade(tipo: TipoSoftware, id: string): Funcionalidade | undefined {
+  return TIPOS[tipo].funcionalidades.find((f) => f.id === id);
+}
+
+/** Junta às funcionalidades escolhidas tudo aquilo de que dependem (pela ordem da definição). */
+export function comDependencias(tipo: TipoSoftware, ids: string[]): string[] {
+  const escolhidas = new Set<string>();
+  const juntar = (id: string) => {
+    const f = funcionalidade(tipo, id);
+    if (!f || escolhidas.has(id)) return;
+    escolhidas.add(id);
+    f.requer.forEach(juntar);
+  };
+  ids.forEach(juntar);
+  return TIPOS[tipo].funcionalidades.filter((f) => escolhidas.has(f.id)).map((f) => f.id);
+}
+
+/** Tira uma funcionalidade e tudo o que dependia dela, direta ou indiretamente. */
+export function semDependentes(tipo: TipoSoftware, ids: string[], remover: string): string[] {
+  const fora = new Set([remover]);
+  let mudou = true;
+  while (mudou) {
+    mudou = false;
+    for (const id of ids)
+      if (!fora.has(id) && funcionalidade(tipo, id)?.requer.some((r) => fora.has(r))) {
+        fora.add(id);
+        mudou = true;
+      }
+  }
+  return ids.filter((id) => !fora.has(id));
+}
+
+export function validarFuncionalidades(tipo: TipoSoftware, ids: string[]): Resultado {
+  for (const id of ids) {
+    const f = funcionalidade(tipo, id);
+    if (!f) return { ok: false, msg: `Funcionalidade desconhecida: ${id}.` };
+    const falta = f.requer.find((r) => !ids.includes(r));
+    if (falta) return { ok: false, msg: `«${f.nome}» precisa de «${funcionalidade(tipo, falta)!.nome}».` };
+  }
+  if (new Set(ids).size !== ids.length) return { ok: false, msg: 'Funcionalidade repetida.' };
+  return { ok: true };
+}
+
+export function trabalhoDoProjeto(tipo: TipoSoftware, ids: string[]): number {
+  return TIPOS[tipo].trabalho + ids.reduce((t, id) => t + (funcionalidade(tipo, id)?.trabalho ?? 0), 0);
+}
+
+/** Multiplicador de vendas das funcionalidades: 1 + Σ valor. */
+export function valorDoProjeto(tipo: TipoSoftware, ids: string[]): number {
+  return 1 + ids.reduce((t, id) => t + (funcionalidade(tipo, id)?.valor ?? 0), 0);
+}
+
+export function tipoDisponivel(s: Estado, tipo: TipoSoftware): boolean {
+  return s.produtos.length >= TIPOS[tipo].produtosNecessarios;
+}
 
 export const VELOCIDADE_ANDAR = 0.2; // células por minuto de jogo
 
@@ -113,6 +259,8 @@ export interface Secretaria {
 
 export interface Projeto {
   nome: string;
+  tipo: TipoSoftware;
+  funcionalidades: string[];
   trabalhoFeito: number;
   trabalhoTotal: number;
   somaCompetencia: number; // para calcular a qualidade
@@ -120,6 +268,8 @@ export interface Projeto {
 
 export interface Produto {
   nome: string;
+  tipo: TipoSoftware;
+  funcionalidades: string[];
   qualidade: number; // 0..1
   vendasMes: number; // € previstos para o próximo fecho de mês
   receitaTotal: number;
@@ -509,43 +659,71 @@ export function despedir(s: Estado, id: number): Resultado {
 // Projetos e produtos
 // ---------------------------------------------------------------------------
 
-export function iniciarProjeto(s: Estado, nome: string): Resultado {
+export function iniciarProjeto(
+  s: Estado, nome: string, tipo: TipoSoftware = 'utilitario', funcionalidades: string[] = [],
+): Resultado {
   if (s.projeto) return { ok: false, msg: 'Já há um projeto em curso.' };
-  const limpo = nome.trim() || `Utilitário ${s.produtos.length + 1}`;
-  s.projeto = { nome: limpo, trabalhoFeito: 0, trabalhoTotal: ECON.trabalhoProjeto, somaCompetencia: 0 };
-  mensagem(s, `Começou o desenvolvimento de «${limpo}».`);
+  const def = TIPOS[tipo];
+  if (!def) return { ok: false, msg: 'Tipo de software desconhecido.' };
+  if (!tipoDisponivel(s, tipo)) {
+    const n = def.produtosNecessarios;
+    return { ok: false, msg: `Para fazer um ${def.nome.toLowerCase()} precisas de ${n} produto${n === 1 ? '' : 's'} lançado${n === 1 ? '' : 's'}.` };
+  }
+  const v = validarFuncionalidades(tipo, funcionalidades);
+  if (!v.ok) return v;
+  const doTipo = s.produtos.filter((p) => p.tipo === tipo).length;
+  const limpo = nome.trim() || `${def.nome} ${doTipo + 1}`;
+  s.projeto = {
+    nome: limpo,
+    tipo,
+    funcionalidades: comDependencias(tipo, funcionalidades),
+    trabalhoFeito: 0,
+    trabalhoTotal: trabalhoDoProjeto(tipo, funcionalidades),
+    somaCompetencia: 0,
+  };
+  mensagem(s, `Começou o desenvolvimento de «${limpo}» (${def.nome.toLowerCase()}).`);
   return { ok: true };
 }
 
 /**
- * Quanto do mercado já está ocupado pelos nossos produtos ainda à venda
- * (soma das vendas mensais atuais, em unidades de vendasBase).
+ * Quanto do mercado de um tipo já está ocupado pelos nossos produtos desse tipo ainda à venda
+ * (soma das vendas mensais atuais, em unidades das vendas base do tipo).
  */
-export function ocupacaoMercado(s: Estado): number {
-  return s.produtos.reduce((t, p) => t + p.vendasMes, 0) / ECON.vendasBase;
+export function ocupacaoMercado(s: Estado, tipo: TipoSoftware): number {
+  return s.produtos.filter((p) => p.tipo === tipo).reduce((t, p) => t + p.vendasMes, 0) / TIPOS[tipo].vendas;
 }
 
-/** Fator (0–1] das vendas de um produto lançado agora, devido à saturação do mercado. */
-export function fatorMercado(s: Estado): number {
-  return 1 / (1 + ECON.saturacao * ocupacaoMercado(s));
+/** Fator (0–1] das vendas de um produto desse tipo lançado agora, devido à saturação do mercado. */
+export function fatorMercado(s: Estado, tipo: TipoSoftware): number {
+  return 1 / (1 + ECON.saturacao * ocupacaoMercado(s, tipo));
+}
+
+/** Vendas do 1.º mês de um produto, dada a qualidade (0–1) e o fator de mercado. */
+export function vendasIniciais(tipo: TipoSoftware, funcionalidades: string[], qualidade: number, mercado: number): number {
+  const def = TIPOS[tipo];
+  return def.vendas * valorDoProjeto(tipo, funcionalidades) * qualidade ** def.exigencia * mercado;
 }
 
 function lancarProjeto(s: Estado): void {
   const p = s.projeto!;
   const qualidade = Math.min(1, (p.somaCompetencia / Math.max(1, p.trabalhoFeito)) * 1.2);
-  const mercado = fatorMercado(s);
+  const mercado = fatorMercado(s, p.tipo);
   const produto: Produto = {
     nome: p.nome,
+    tipo: p.tipo,
+    funcionalidades: p.funcionalidades,
     qualidade,
-    vendasMes: ECON.vendasBase * qualidade * mercado,
+    vendasMes: vendasIniciais(p.tipo, p.funcionalidades, qualidade, mercado),
     receitaTotal: 0,
     lancadoEm: s.minuto,
   };
   s.produtos.push(produto);
   s.projeto = null;
   const perda = Math.round((1 - mercado) * 100);
+  const novos = LISTA_TIPOS.filter((t) => TIPOS[t].produtosNecessarios === s.produtos.length);
   mensagem(s, `«${produto.nome}» foi lançado! Qualidade ${Math.round(qualidade * 100)}%.`
-    + (perda >= 5 ? ` O mercado de utilitários está saturado: vendas −${perda}%.` : ''));
+    + (perda >= 5 ? ` O mercado de ${TIPOS[p.tipo].plural.toLowerCase()} está saturado: vendas −${perda}%.` : ''));
+  for (const t of novos) mensagem(s, `Novo tipo de software disponível: ${TIPOS[t].nome.toLowerCase()}.`);
 }
 
 // ---------------------------------------------------------------------------
@@ -769,7 +947,7 @@ function fimDoMes(s: Estado): void {
   for (const p of s.produtos) {
     receitas += p.vendasMes;
     p.receitaTotal += p.vendasMes;
-    p.vendasMes *= ECON.quedaVendas;
+    p.vendasMes *= TIPOS[p.tipo].queda;
   }
   const salarios = s.funcionarios.reduce((t, f) => t + f.salario, 0);
   const despesas = salarios + ECON.rendaMensal;

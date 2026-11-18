@@ -1,8 +1,9 @@
 // Testes da lógica sem 3D: correm em Node com `npm run sim` (seguidos de simtest.ts).
 import {
   avancar, calcularCaminho, colocarParedes, colocarPorta, colocarSecretaria, contratar,
-  detetarSalas, ECON, fatorMercado, iniciarProjeto, MIN_POR_DIA, novoJogo, segmento,
-  type Estado,
+  comDependencias, detetarSalas, ECON, fatorMercado, iniciarProjeto, LISTA_TIPOS, MIN_POR_DIA,
+  novoJogo, segmento, semDependentes, TIPOS, trabalhoDoProjeto, validarFuncionalidades, valorDoProjeto,
+  vendasIniciais, type Estado, type TipoSoftware,
 } from './sim.ts';
 
 // ---------------------------------------------------------------------------
@@ -98,26 +99,58 @@ verificar(cenarioSala(false) === 'semAcesso', 'sem porta fica sem acesso');
 }
 
 {
-  // Saturação do mercado
-  const s = novoJogo(1);
-  verificar(fatorMercado(s) === 1, 'sem produtos o mercado está livre');
-  s.produtos.push({ nome: 'A', qualidade: 1, vendasMes: ECON.vendasBase, receitaTotal: 0, lancadoEm: 0 });
-  verificar(Math.abs(fatorMercado(s) - 1 / (1 + ECON.saturacao)) < 1e-9, 'um produto a vender bem satura o mercado');
-  s.produtos[0].vendasMes = 0;
-  verificar(fatorMercado(s) === 1, 'produtos que já não vendem não contam');
+  // Definições dos tipos: dependências existem, são do mesmo tipo e não há ciclos
+  for (const t of LISTA_TIPOS) {
+    const ids = TIPOS[t].funcionalidades.map((f) => f.id);
+    TIPOS[t].funcionalidades.forEach((f, i) =>
+      verificar(f.requer.every((r) => ids.indexOf(r) >= 0 && ids.indexOf(r) < i),
+        `${t}/${f.id}: dependências existem e vêm antes (sem ciclos)`));
+  }
 
-  // Um projeto quase acabado é lançado com vendas reduzidas pela saturação
-  s.produtos[0].vendasMes = ECON.vendasBase;
-  iniciarProjeto(s, 'B');
+  // Dependências
+  verificar(comDependencias('editor', ['tabelas']).join() === 'formatacao,tabelas', 'escolher tabelas junta a formatação');
+  verificar(semDependentes('editor', ['corretor', 'formatacao', 'tabelas', 'nuvem'], 'formatacao').join() === 'corretor',
+    'tirar a formatação tira tabelas e nuvem');
+  verificar(!validarFuncionalidades('editor', ['tabelas']).ok, 'tabelas sem formatação é inválido');
+  verificar(validarFuncionalidades('editor', ['formatacao', 'tabelas']).ok, 'tabelas com formatação é válido');
+  verificar(trabalhoDoProjeto('utilitario', ['grafica', 'agendamento']) === 20000 + 6000 + 5000, 'trabalho soma as funcionalidades');
+  verificar(Math.abs(valorDoProjeto('utilitario', ['grafica', 'agendamento']) - 1.45) < 1e-9, 'valor soma as funcionalidades');
+
+  // Desbloqueio e validação ao iniciar
+  const s = novoJogo(1);
+  verificar(!iniciarProjeto(s, '', 'editor').ok, 'editor bloqueado sem produtos');
+  verificar(!iniciarProjeto(s, '', 'utilitario', ['agendamento']).ok, 'projeto com dependência em falta é recusado');
+  verificar(iniciarProjeto(s, '', 'utilitario', ['grafica']).ok, 'utilitário com interface gráfica começa');
+  verificar(s.projeto!.trabalhoTotal === 26000 && s.projeto!.nome === 'Utilitário 1', 'projeto com trabalho e nome certos');
+}
+
+{
+  // Saturação do mercado, separada por tipo
+  const s = novoJogo(1);
+  const produto = (tipo: TipoSoftware, vendasMes: number) =>
+    ({ nome: 'X', tipo, funcionalidades: [], qualidade: 1, vendasMes, receitaTotal: 0, lancadoEm: 0 });
+  verificar(fatorMercado(s, 'utilitario') === 1, 'sem produtos o mercado está livre');
+  s.produtos.push(produto('utilitario', TIPOS.utilitario.vendas));
+  verificar(Math.abs(fatorMercado(s, 'utilitario') - 1 / (1 + ECON.saturacao)) < 1e-9, 'um produto a vender bem satura o mercado');
+  verificar(fatorMercado(s, 'editor') === 1, 'um utilitário não satura o mercado dos editores');
+  s.produtos[0].vendasMes = 0;
+  verificar(fatorMercado(s, 'utilitario') === 1, 'produtos que já não vendem não contam');
+
+  // Um editor quase acabado é lançado com vendas reduzidas pela saturação dos editores
+  s.produtos[0].vendasMes = TIPOS.utilitario.vendas;
+  s.produtos.push(produto('editor', TIPOS.editor.vendas));
+  verificar(iniciarProjeto(s, 'B', 'editor', ['corretor']).ok, 'editor desbloqueado com produtos lançados');
   s.projeto!.trabalhoFeito = s.projeto!.trabalhoTotal - 0.001;
   s.projeto!.somaCompetencia = s.projeto!.trabalhoFeito; // competência média 1 → qualidade 100%
   colocarSecretaria(s, 3, 3);
   contratar(s, 0);
   avancar(s, MIN_POR_DIA + 3 * 60);
-  const b = s.produtos[1];
-  verificar(b !== undefined && b.qualidade === 1, 'o projeto é lançado com qualidade 100%');
-  verificar(b !== undefined && Math.abs(b.vendasMes - ECON.vendasBase / (1 + ECON.saturacao)) < 1,
-    'as vendas do novo produto refletem a saturação');
+  const b = s.produtos[2];
+  verificar(b !== undefined && b.qualidade === 1 && b.tipo === 'editor', 'o editor é lançado com qualidade 100%');
+  verificar(b !== undefined && Math.abs(b.vendasMes - TIPOS.editor.vendas * 1.3 / (1 + ECON.saturacao)) < 1,
+    'as vendas do editor refletem as funcionalidades e a saturação');
+  verificar(Math.abs(vendasIniciais('jogo', [], 0.5, 1) - TIPOS.jogo.vendas * 0.5 ** 1.5) < 1e-6,
+    'os jogos castigam mais a falta de qualidade');
 }
 
 console.log(`Testes: ${testes} OK`);
