@@ -6,17 +6,19 @@ import { hash, mat } from './modelos.ts';
 
 /** Momentos do dia (hora → cores e intensidades); entre dois momentos interpola-se. */
 const MOMENTOS: { h: number; ceu: number; sol: number; corSol: number; hemi: number; interior: number; luzes: number }[] = [
-  { h: 0, ceu: 0x0b1430, sol: 0.35, corSol: 0x9db4ff, hemi: 0.55, interior: 1.0, luzes: 1 },
-  { h: 5, ceu: 0x1c2452, sol: 0.35, corSol: 0x9db4ff, hemi: 0.6, interior: 1.0, luzes: 1 },
+  { h: 0, ceu: 0x0b1430, sol: 0.3, corSol: 0x8fa6ff, hemi: 0.42, interior: 0.55, luzes: 1 },
+  { h: 5, ceu: 0x1c2452, sol: 0.3, corSol: 0x8fa6ff, hemi: 0.45, interior: 0.55, luzes: 1 },
   { h: 6.5, ceu: 0xf5a37a, sol: 1.0, corSol: 0xffb27a, hemi: 0.85, interior: 0.5, luzes: 0.4 },
   { h: 8, ceu: 0x8fd0ff, sol: 2.6, corSol: 0xfff2dc, hemi: 1.15, interior: 0, luzes: 0 },
   { h: 17, ceu: 0x8fd0ff, sol: 2.6, corSol: 0xfff2dc, hemi: 1.15, interior: 0, luzes: 0 },
   { h: 18.7, ceu: 0xff8f6b, sol: 1.1, corSol: 0xff9d5c, hemi: 0.85, interior: 0.5, luzes: 0.6 },
-  { h: 20, ceu: 0x2e2a66, sol: 0.4, corSol: 0xa5b4fc, hemi: 0.6, interior: 1.0, luzes: 1 },
-  { h: 24, ceu: 0x0b1430, sol: 0.35, corSol: 0x9db4ff, hemi: 0.55, interior: 1.0, luzes: 1 },
+  { h: 20, ceu: 0x2e2a66, sol: 0.35, corSol: 0xa5b4fc, hemi: 0.5, interior: 0.55, luzes: 1 },
+  { h: 24, ceu: 0x0b1430, sol: 0.3, corSol: 0x8fa6ff, hemi: 0.42, interior: 0.55, luzes: 1 },
 ];
 
 const HORA_FIXA = 13; // sem ciclo dia/noite
+const COR_HEMI_DIA = new THREE.Color(0xdfeaff);
+const COR_HEMI_NOITE = new THREE.Color(0x5566bb);
 
 export class Ambiente {
   readonly sol: THREE.DirectionalLight;
@@ -300,6 +302,7 @@ export class Ambiente {
     this.sol.intensity = mistura(a.sol, b.sol);
     this.sol.color.setHex(a.corSol).lerp(new THREE.Color(b.corSol), t);
     this.hemi.intensity = mistura(a.hemi, b.hemi);
+    this.hemi.color.copy(COR_HEMI_DIA).lerp(COR_HEMI_NOITE, mistura(a.luzes, b.luzes));
     this.interior.intensity = mistura(a.interior, b.interior) * 1.1;
     const luzes = mistura(a.luzes, b.luzes);
     this.matLuz.emissiveIntensity = luzes * 2.2;

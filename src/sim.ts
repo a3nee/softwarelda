@@ -1131,7 +1131,7 @@ function recalcular(s: Estado, f: Funcionario): void {
     if (f.estado !== novo)
       mensagem(s, aEntrar
         ? `${f.nome} não consegue chegar à secretária. Falta uma porta?`
-        : `${f.nome} está preso(a) e não consegue sair do escritório.`);
+        : `${f.nome} está preso(a) e não consegue sair do escritório.`, 'aviso');
     f.estado = novo;
   }
 }
