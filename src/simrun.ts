@@ -7,7 +7,8 @@ import {
   cancelarProjeto, definirEquipa, despedir, eficienciaEquipa, membrosDe, semProjeto,
   exportarJogo, importarJogo, mesDeJogo, MIN_POR_MES, VERSAO_SAVE,
   bonusDecoracao, colocarObjeto, CONQUISTAS, DECORACAO, DIFICULDADES, EVENTOS, OBJETOS, objetoEm,
-  removerObjeto, verificarConquistas,
+  removerObjeto, verificarConquistas, alvoFelicidade, comprarMelhoria, coordenacaoDe, criticasPara, ganharXp,
+  nivelDaEmpresa, pontosMelhoria, rendaDe, verificarMissoes, xpDeLancamento, xpParaNivel, XP_CONQUISTA,
   type Estado, type TipoSoftware, type Trabalhador,
 } from './sim.ts';
 
@@ -381,6 +382,77 @@ verificar(cenarioSala(false) === 'semAcesso', 'sem porta fica sem acesso');
   verificar(tipos.has('evento') && tipos.has('aviso'), 'há eventos bons e maus');
   verificar(importarJogo(exportarJogo(s)).ok, 'o estado continua válido depois dos eventos');
   verificar(Object.keys(EVENTOS).length >= 8, 'há vários eventos');
+}
+
+// --- Progressão: nível, melhorias, missões e críticas ---
+{
+  verificar(xpParaNivel(1) === 0 && xpParaNivel(3) - xpParaNivel(2) > xpParaNivel(2) - xpParaNivel(1),
+    'cada nível pede mais experiência do que o anterior');
+  verificar(novoJogo(7).missoes.length === 0, 'sem a opção não há missões (os testes de equilíbrio correm assim)');
+  const s = novoJogo(7, 24, 18, { missoes: true });
+  verificar(s.missoes.map((m) => m.tipo).join() === 'contratar,sala,lancar', 'um jogo novo começa com as 3 missões de ensino');
+  verificar(nivelDaEmpresa(s) === 1 && pontosMelhoria(s) === 0 && !comprarMelhoria(s, 'marketing').ok,
+    'começa no nível 1, sem pontos para melhorias');
+
+  for (let i = 0; i < 4; i++) colocarSecretaria(s, 3 + i, 3);
+  const premio = s.missoes[0].dinheiro;
+  const d0 = s.dinheiro;
+  contratar(s, 0);
+  verificar(s.missoesFeitas === 0, 'a missão só fica cumprida quando se chega ao alvo');
+  contratar(s, 0);
+  verificar(s.missoesFeitas === 1 && s.dinheiro === d0 + premio, 'cumprir uma missão paga a recompensa');
+  verificar(s.missoes.length === 3 && !s.missoes.some((m) => m.tipo === 'contratar'), 'e aparece outra no lugar');
+  verificar(s.xp === XP_CONQUISTA + 100, 'a conquista e a missão dão experiência');
+  const semente = s.semente;
+  s.missoes[0].alvo = 0;
+  verificarMissoes(s);
+  verificar(s.semente === semente && s.missoesFeitas === 2, 'gerar e pagar missões não usa o gerador aleatório');
+
+  verificar(alvoFelicidade(s, s.funcionarios[0]) === 75, 'sem melhorias o alvo de felicidade é 75');
+  s.xp = xpParaNivel(4) - 1;
+  ganharXp(s, 1);
+  verificar(nivelDaEmpresa(s) === 4 && pontosMelhoria(s) === 3 && s.mensagens.some((m) => m.tipo === 'nivel'),
+    'subir de nível dá pontos de melhoria e uma mensagem');
+  verificar(!comprarMelhoria(s, 'fas').ok, 'melhorias de nível alto ficam bloqueadas');
+  verificar(comprarMelhoria(s, 'agil').ok && !comprarMelhoria(s, 'agil').ok, 'compra-se cada melhoria uma vez');
+  verificar(eficienciaEquipa(4, coordenacaoDe(s)) > eficienciaEquipa(4), 'a metodologia ágil melhora as equipas grandes');
+  comprarMelhoria(s, 'cafe');
+  verificar(alvoFelicidade(s, s.funcionarios[0]) === 80, 'o café sobe o alvo de felicidade');
+  comprarMelhoria(s, 'renda');
+  verificar(rendaDe(s) < ECON.rendaMensal && pontosMelhoria(s) === 0, 'a renda negociada baixa a renda e gasta o último ponto');
+  s.xp = xpParaNivel(6);
+  const d1 = s.dinheiro;
+  verificar(comprarMelhoria(s, 'investidores').ok && s.dinheiro === d1 + 25000, 'a ronda de investimento dá 25 000 €');
+
+  const xp0 = s.xp;
+  iniciarProjeto(s, 'Calculadora', 'utilitario');
+  for (let i = 0; i < 12 && s.produtos.length === 0; i++) avancar(s, MIN_POR_MES / 2);
+  const p = s.produtos[0];
+  verificar(p !== undefined && p.criticas?.length === 4 && p.criticas.every((n) => n >= 1 && n <= 10), 'cada lançamento tem 4 críticas de 1 a 10');
+  const media = p.criticas!.reduce((a, b) => a + b, 0) / 4;
+  verificar(Math.abs(media - p.qualidade * 10) <= 1.8, 'as críticas andam à volta da qualidade');
+  verificar(JSON.stringify(criticasPara('X', 0.7, 100)) === JSON.stringify(criticasPara('X', 0.7, 100)), 'as críticas são determinísticas');
+  verificar(s.xp >= xp0 + xpDeLancamento('utilitario', p.qualidade), 'lançar dá experiência');
+  verificar(s.missoesFeitas >= 3, 'lançar um produto cumpre a missão de lançamento');
+
+  const bom = exportarJogo(s);
+  const r = importarJogo(bom);
+  verificar(r.ok && r.estado.melhorias.length === 4 && r.estado.missoes.length === s.missoes.length, 'a progressão é guardada');
+  const estragar = (f: (o: any) => void) => { const o = JSON.parse(bom); f(o); return importarJogo(JSON.stringify(o)).ok; };
+  verificar(!estragar((o) => { o.estado.melhorias.push('voar'); }), 'melhoria desconhecida é recusada');
+  verificar(!estragar((o) => { o.estado.melhorias.push('agil'); }), 'melhoria repetida é recusada');
+  verificar(!estragar((o) => { o.estado.missoes[0].tipo = 'dormir'; }), 'missão desconhecida é recusada');
+  verificar(!estragar((o) => { o.estado.xp = -5; }), 'experiência negativa é recusada');
+  const v2 = JSON.parse(bom);
+  v2.versao = 2;
+  for (const k of ['xp', 'melhorias', 'comMissoes', 'missoes', 'missoesFeitas', 'proximaMissao']) delete v2.estado[k];
+  const r2 = importarJogo(JSON.stringify(v2));
+  verificar(r2.ok && r2.estado.xp === 0 && r2.estado.comMissoes && r2.estado.missoes.length === 0,
+    'um save da versão 2 carrega, sem experiência e com missões ligadas');
+  if (r2.ok) {
+    verificarMissoes(r2.estado);
+    verificar(r2.estado.missoes.length === 3, 'e as missões aparecem na primeira verificação');
+  }
 }
 
 console.log(`Testes: ${testes} OK`);

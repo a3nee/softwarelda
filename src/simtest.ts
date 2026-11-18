@@ -9,6 +9,8 @@ import {
 } from './sim.ts';
 
 const MESES = 24;
+// Com --missoes, os mesmos jogadores ganham também as recompensas das missões (o jogo a sério tem-nas ligadas).
+const COM_MISSOES = ((globalThis as { process?: { argv: string[] } }).process?.argv ?? []).includes('--missoes');
 const SEMENTES = [1, 2, 3, 4, 5, 6, 7, 8];
 const RESERVA = Number((globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env.RESERVA ?? 6); // meses de despesas que o jogador prudente quer guardar antes de contratar
 
@@ -189,7 +191,7 @@ interface Corrida {
 const DIARIO = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env.DIARIO;
 
 function correr(jogador: Jogador, semente: number, nome = ''): Corrida {
-  const s = novoJogo(semente);
+  const s = novoJogo(semente, 24, 18, { missoes: COM_MISSOES });
   let minimo = s.dinheiro;
   const caixaMensal: number[] = [];
   const diario = DIARIO === `${nome}:${semente}`;
@@ -237,7 +239,7 @@ const k = (v: number) => (Number.isFinite(v) ? `${(v / 1000).toFixed(0)}k` : '�
 // ---------------------------------------------------------------------------
 
 const resultados: Record<string, Corrida[]> = {};
-console.log(`Equilíbrio: ${MESES} meses × ${SEMENTES.length} sementes (valores em milhares de €)\n`);
+console.log(`${COM_MISSOES ? '\n=== Com missões ===\n' : ''}Equilíbrio: ${MESES} meses × ${SEMENTES.length} sementes (valores em milhares de €)\n`);
 console.log('Cenário            | Falências | Caixa mín. | Final mín/med/máx | Lucro ano1/ano2 | 1.º lanç. | Produtos | Equipa');
 for (const [nome, jogador] of Object.entries(JOGADORES)) {
   const r = SEMENTES.map((sem) => correr(jogador, sem, nome));

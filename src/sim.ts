@@ -293,10 +293,12 @@ export interface Produto {
   vendasMes: number; // € previstos para o próximo fecho de mês
   receitaTotal: number;
   lancadoEm: number; // minuto de jogo
+  criticas?: number[]; // notas dos críticos (1–10); os saves antigos não as têm
 }
 
 /** Para a interface escolher cor, som e se mostra um aviso flutuante. */
-export type TipoMensagem = 'info' | 'aviso' | 'lancamento' | 'desbloqueio' | 'conquista' | 'evento' | 'mes' | 'falencia';
+export type TipoMensagem = 'info' | 'aviso' | 'lancamento' | 'desbloqueio' | 'conquista' | 'evento' | 'mes' | 'falencia'
+  | 'nivel' | 'missao';
 
 export interface Mensagem {
   minuto: number;
@@ -353,6 +355,7 @@ export interface OpcoesJogo {
   nome?: string;
   dificuldade?: Dificuldade;
   eventos?: boolean; // eventos aleatórios no fecho do mês
+  missoes?: boolean; // missões com recompensas (os testes de equilíbrio correm sem elas)
 }
 
 /** Um fecho de mês, para os gráficos das estatísticas. */
@@ -387,6 +390,12 @@ export interface Estado {
   objetos: Objeto[]; // decoração
   historico: RegistoMes[];
   conquistas: string[]; // ids de CONQUISTAS já desbloqueadas
+  xp: number; // experiência da empresa (dá o nível)
+  melhorias: IdMelhoria[];
+  comMissoes: boolean;
+  missoes: Missao[]; // ativas (até 3)
+  missoesFeitas: number;
+  proximaMissao: number; // quantas missões já foram geradas (escolhe a próxima)
 }
 
 // ---------------------------------------------------------------------------
@@ -445,8 +454,15 @@ export function novoJogo(semente = 12345, largura = 24, altura = 18, opcoes: Opc
     objetos: [],
     historico: [],
     conquistas: [],
+    xp: 0,
+    melhorias: [],
+    comMissoes: opcoes.missoes ?? false,
+    missoes: [],
+    missoesFeitas: 0,
+    proximaMissao: 0,
   };
   gerarCandidatos(s);
+  completarMissoes(s);
   mensagem(s, `Bem-vindo à ${nome}! Coloca secretárias e contrata a tua equipa.`);
   return s;
 }
@@ -458,7 +474,8 @@ export function mensagem(s: Estado, texto: string, tipo: TipoMensagem = 'info'):
 
 export function gerarCandidatos(s: Estado): void {
   s.candidatos = [];
-  for (let i = 0; i < 3; i++) s.candidatos.push(novoCandidato(s));
+  const n = temMelhoria(s, 'recrutador') ? 4 : 3;
+  for (let i = 0; i < n; i++) s.candidatos.push(novoCandidato(s));
 }
 
 function novoCandidato(s: Estado): Candidato {
@@ -595,7 +612,8 @@ export function bonusDecoracao(s: Estado, x: number, z: number, salas: Salas = d
 export function alvoFelicidade(s: Estado, f: Funcionario, salas?: Salas): number {
   const d = f.secretariaId === null ? undefined : s.secretarias.find((o) => o.id === f.secretariaId);
   if (!d) return 40;
-  return 75 + (s.objetos.length ? bonusDecoracao(s, d.x, d.z, salas) : 0);
+  const cafe = temMelhoria(s, 'cafe') ? 5 : 0;
+  return Math.min(100, 75 + cafe + (s.objetos.length ? bonusDecoracao(s, d.x, d.z, salas) : 0));
 }
 
 function atribuirSecretarias(s: Estado): void {
@@ -825,8 +843,18 @@ export function semProjeto(s: Estado): Funcionario[] {
 }
 
 /** Rendimento de cada membro de uma equipa de n pessoas (coordenação: equipas grandes rendem menos por pessoa). */
-export function eficienciaEquipa(n: number): number {
-  return n <= 1 ? 1 : 1 / (1 + ECON.coordenacao * (n - 1));
+export function eficienciaEquipa(n: number, coordenacao = ECON.coordenacao): number {
+  return n <= 1 ? 1 : 1 / (1 + coordenacao * (n - 1));
+}
+
+/** Coordenação desta empresa (a metodologia ágil corta-a para metade). */
+export function coordenacaoDe(s: Estado): number {
+  return temMelhoria(s, 'agil') ? ECON.coordenacao / 2 : ECON.coordenacao;
+}
+
+/** Renda mensal desta empresa. */
+export function rendaDe(s: Estado): number {
+  return temMelhoria(s, 'renda') ? 900 : ECON.rendaMensal;
 }
 
 /** Põe um funcionário na equipa de um projeto (ou tira-o, com null). */
@@ -963,7 +991,7 @@ export function qualidadeDoProjeto(p: TrabalhoPorAreas): number {
  * se esta equipa trabalhar 8 h por dia (passos de 1 h). meses = Infinity se não acabar em 3 anos.
  */
 export function estimarProjeto(
-  equipa: Trabalhador[], tipo: TipoSoftware, funcionalidades: string[],
+  equipa: Trabalhador[], tipo: TipoSoftware, funcionalidades: string[], coordenacao = ECON.coordenacao,
 ): { meses: number; qualidade: number } {
   return simularAteAcabar({
     tipo,
@@ -971,19 +999,21 @@ export function estimarProjeto(
     trabalhoFeito: 0,
     feito: { programacao: 0, design: 0, testes: 0 },
     somaQualidade: { programacao: 0, design: 0, testes: 0 },
-  }, equipa);
+  }, equipa, coordenacao);
 }
 
 /** Meses que faltam a um projeto em curso com esta equipa (Infinity se parado). */
-export function mesesRestantes(p: Projeto, equipa: Trabalhador[]): number {
+export function mesesRestantes(p: Projeto, equipa: Trabalhador[], coordenacao = ECON.coordenacao): number {
   return simularAteAcabar(
-    { ...p, feito: { ...p.feito }, somaQualidade: { ...p.somaQualidade } }, equipa).meses;
+    { ...p, feito: { ...p.feito }, somaQualidade: { ...p.somaQualidade } }, equipa, coordenacao).meses;
 }
 
-function simularAteAcabar(p: TrabalhoPorAreas, equipa: Trabalhador[]): { meses: number; qualidade: number } {
+function simularAteAcabar(
+  p: TrabalhoPorAreas, equipa: Trabalhador[], coordenacao: number,
+): { meses: number; qualidade: number } {
   if (equipa.length === 0) return { meses: Infinity, qualidade: qualidadeDoProjeto(p) };
   const LIMITE = 36 * DIAS_POR_MES * 8;
-  const ef = eficienciaEquipa(equipa.length);
+  const ef = eficienciaEquipa(equipa.length, coordenacao);
   let horas = 0;
   while (!projetoAcabado(p) && horas < LIMITE) {
     for (const f of equipa) trabalharUmMinuto(p, f, 60, ef);
@@ -993,26 +1023,32 @@ function simularAteAcabar(p: TrabalhoPorAreas, equipa: Trabalhador[]): { meses: 
 }
 
 function lancarProjeto(s: Estado, p: Projeto): void {
-  const qualidade = qualidadeDoProjeto(p);
+  const qualidade = Math.min(1, qualidadeDoProjeto(p) + bonusQualidade(s));
   const mercado = fatorMercado(s, p.tipo);
+  const marketing = temMelhoria(s, 'marketing') ? 1.15 : 1;
   const produto: Produto = {
     nome: p.nome,
     tipo: p.tipo,
     funcionalidades: p.funcionalidades,
     qualidade,
-    vendasMes: vendasIniciais(p.tipo, p.funcionalidades, qualidade, mercado),
+    vendasMes: vendasIniciais(p.tipo, p.funcionalidades, qualidade, mercado) * marketing,
     receitaTotal: 0,
     lancadoEm: s.minuto,
+    criticas: criticasPara(p.nome, qualidade, s.minuto),
   };
   s.produtos.push(produto);
   s.projetos = s.projetos.filter((o) => o !== p);
-  for (const f of membrosDe(s, p.id)) f.projetoId = null;
+  for (const f of membrosDe(s, p.id)) {
+    f.projetoId = null;
+    if (temMelhoria(s, 'premios')) f.felicidade = Math.min(100, f.felicidade + 15);
+  }
   const perda = Math.round((1 - mercado) * 100);
   const novos = LISTA_TIPOS.filter((t) => TIPOS[t].produtosNecessarios === s.produtos.length);
   mensagem(s, `«${produto.nome}» foi lançado! Qualidade ${Math.round(qualidade * 100)}%. A equipa está livre.`
     + (perda >= 5 ? ` O mercado de ${TIPOS[p.tipo].plural.toLowerCase()} está saturado: vendas −${perda}%.` : ''),
   'lancamento');
   for (const t of novos) mensagem(s, `Novo tipo de software disponível: ${TIPOS[t].nome.toLowerCase()}.`, 'desbloqueio');
+  ganharXp(s, xpDeLancamento(p.tipo, qualidade));
   verificarConquistas(s);
 }
 
@@ -1177,7 +1213,7 @@ function andar(f: Funcionario): boolean {
 // ---------------------------------------------------------------------------
 
 // Versão 2: nome da empresa, dificuldade, eventos, decoração, histórico e conquistas.
-export const VERSAO_SAVE = 2;
+export const VERSAO_SAVE = 3;
 
 export interface Save {
   versao: number;
@@ -1203,6 +1239,7 @@ export function importarJogo(texto: string): ResultadoCarregar {
   if (!objeto(o) || typeof o.versao !== 'number') return { ok: false, msg: 'Isto não é um jogo guardado.' };
   if (o.versao > VERSAO_SAVE) return { ok: false, msg: 'Este jogo foi guardado numa versão mais recente.' };
   if (o.versao < 2 && objeto(o.estado)) migrarDaVersao1(o.estado);
+  if (o.versao < 3 && objeto(o.estado)) migrarDaVersao2(o.estado);
   const erro = erroNoEstado(o.estado);
   if (erro) return { ok: false, msg: `Jogo guardado inválido: ${erro}.` };
   return { ok: true, estado: o.estado as Estado, guardadoEm: typeof o.guardadoEm === 'number' ? o.guardadoEm : 0 };
@@ -1216,6 +1253,16 @@ function migrarDaVersao1(e: Record<string, unknown>): void {
   e.objetos ??= [];
   e.historico ??= [];
   e.conquistas ??= [];
+}
+
+/** Os campos que a versão 3 acrescentou. As missões aparecem na primeira verificação. */
+function migrarDaVersao2(e: Record<string, unknown>): void {
+  e.xp ??= 0;
+  e.melhorias ??= [];
+  e.comMissoes ??= true;
+  e.missoes ??= [];
+  e.missoesFeitas ??= 0;
+  e.proximaMissao ??= 0;
 }
 
 /** Mês de jogo em que estamos (0 = o primeiro); muda no fecho de cada mês. */
@@ -1293,7 +1340,8 @@ function erroNoEstado(e: unknown): string | null {
   for (const p of e.produtos as unknown[])
     if (!objeto(p) || typeof p.nome !== 'string' || typeof p.tipo !== 'string' || !(p.tipo in TIPOS)
       || !Array.isArray(p.funcionalidades) || !numero(p.qualidade) || !numero(p.vendasMes)
-      || !numero(p.receitaTotal) || !numero(p.lancadoEm)) return 'produto';
+      || !numero(p.receitaTotal) || !numero(p.lancadoEm)
+      || (p.criticas !== undefined && !(Array.isArray(p.criticas) && p.criticas.every(numero)))) return 'produto';
   for (const m of e.mensagens as unknown[])
     if (!objeto(m) || !numero(m.minuto) || typeof m.texto !== 'string'
       || (m.tipo !== undefined && typeof m.tipo !== 'string')) return 'mensagem';
@@ -1317,6 +1365,17 @@ function erroNoEstado(e: unknown): string | null {
   for (const r of e.historico as unknown[])
     if (!objeto(r) || !numero(r.mes) || !numero(r.receitas) || !numero(r.despesas) || !numero(r.dinheiro)) return 'histórico';
   if (!(e.conquistas as unknown[]).every((c) => typeof c === 'string')) return 'conquistas';
+  if (!numero(e.xp) || e.xp < 0) return 'experiência';
+  const melhorias = e.melhorias;
+  if (!Array.isArray(melhorias) || !melhorias.every((m) => typeof m === 'string' && m in MELHORIAS)) return 'melhorias';
+  if (new Set(melhorias).size !== melhorias.length) return 'melhoria repetida';
+  if (typeof e.comMissoes !== 'boolean') return 'campo «comMissoes» em falta';
+  if (!inteiro(e.missoesFeitas) || !inteiro(e.proximaMissao)) return 'contador de missões';
+  if (!Array.isArray(e.missoes) || e.missoes.length > MISSOES_ATIVAS) return 'lista «missoes»';
+  for (const m of e.missoes as unknown[])
+    if (!objeto(m) || !inteiro(m.id) || typeof m.tipo !== 'string' || !(m.tipo in TEXTO_MISSAO) || !numero(m.alvo)
+      || !numero(m.desde) || !numero(m.dinheiro) || !numero(m.xp)
+      || (m.software !== undefined && !(typeof m.software === 'string' && m.software in TIPOS))) return 'missão';
   return null;
 }
 
@@ -1360,7 +1419,7 @@ function minutoSeguinte(s: Estado): void {
       }
     } else if (f.estado === 'aTrabalhar' && horario && f.projetoId !== null) {
       const p = s.projetos.find((o) => o.id === f.projetoId);
-      if (p) trabalharUmMinuto(p, f, 1, eficienciaEquipa(tamanho.get(p.id) ?? 1));
+      if (p) trabalharUmMinuto(p, f, 1, eficienciaEquipa(tamanho.get(p.id) ?? 1, coordenacaoDe(s)));
     }
   }
 
@@ -1391,14 +1450,20 @@ function fimDoMes(s: Estado): void {
   for (const p of s.produtos) {
     receitas += p.vendasMes;
     p.receitaTotal += p.vendasMes;
-    p.vendasMes *= TIPOS[p.tipo].queda;
+    const q = TIPOS[p.tipo].queda;
+    p.vendasMes *= temMelhoria(s, 'fas') ? q + (1 - q) * 0.4 : q;
   }
   const salarios = s.funcionarios.reduce((t, f) => t + f.salario, 0);
-  const despesas = salarios + ECON.rendaMensal;
+  const despesas = salarios + rendaDe(s);
   s.dinheiro += receitas - despesas;
   mensagem(s, `Fecho do mês: receitas ${euros(receitas)}, despesas ${euros(despesas)}.`, 'mes');
   s.historico.push({ mes: mesDeJogo(s) - 1, receitas, despesas, dinheiro: s.dinheiro });
   if (s.historico.length > 240) s.historico.shift();
+  if (temMelhoria(s, 'formacao')) for (const f of s.funcionarios) {
+    const a = AREAS.reduce((m, o) => (f.competencias[o] > f.competencias[m] ? o : m), AREAS[0]);
+    f.competencias[a] = Math.min(1, Math.round((f.competencias[a] + 0.01) * 100) / 100);
+  }
+  if (receitas > despesas) ganharXp(s, 20 * Math.min(5, serieDeLucro(s)));
   gerarCandidatos(s);
   if (s.dinheiro < ECON.limiteFalencia) {
     s.falencia = true;
@@ -1567,6 +1632,279 @@ export function verificarConquistas(s: Estado): Conquista[] {
   for (const c of novas) {
     s.conquistas.push(c.id);
     mensagem(s, `${c.icone} Conquista desbloqueada: ${c.nome}!`, 'conquista');
+    ganharXp(s, XP_CONQUISTA);
   }
+  verificarMissoes(s);
   return novas;
+}
+
+// ---------------------------------------------------------------------------
+// Progressão: experiência, nível da empresa, melhorias, missões e críticas.
+// Nada disto usa o gerador aleatório, e as missões só existem com s.comMissoes,
+// por isso os testes de equilíbrio dão o mesmo que antes.
+// ---------------------------------------------------------------------------
+
+export const NIVEL_MAXIMO = 30;
+export const XP_CONQUISTA = 100;
+
+/** Experiência total para chegar ao nível n (começa-se no 1). */
+export function xpParaNivel(n: number): number {
+  return 120 * (n - 1) * n;
+}
+
+export function nivelDaEmpresa(s: Estado): number {
+  let n = 1;
+  while (n < NIVEL_MAXIMO && s.xp >= xpParaNivel(n + 1)) n++;
+  return n;
+}
+
+/** Experiência feita dentro do nível atual e a que falta para o seguinte (0/0 no nível máximo). */
+export function progressoNivel(s: Estado): { feito: number; precisa: number } {
+  const n = nivelDaEmpresa(s);
+  if (n >= NIVEL_MAXIMO) return { feito: 0, precisa: 0 };
+  return { feito: s.xp - xpParaNivel(n), precisa: xpParaNivel(n + 1) - xpParaNivel(n) };
+}
+
+export function ganharXp(s: Estado, xp: number): void {
+  if (xp <= 0 || s.falencia) return;
+  const antes = nivelDaEmpresa(s);
+  s.xp += Math.round(xp);
+  for (let n = antes + 1; n <= nivelDaEmpresa(s); n++)
+    mensagem(s, `⭐ A ${s.nome} subiu ao nível ${n}! Ganhaste um ponto de melhoria.`, 'nivel');
+}
+
+/** Experiência de um lançamento: mais qualidade e tipos mais difíceis dão mais. */
+export function xpDeLancamento(tipo: TipoSoftware, qualidade: number): number {
+  return Math.round(50 + qualidade * 150 * (1 + LISTA_TIPOS.indexOf(tipo) * 0.3));
+}
+
+/** Meses seguidos com lucro, a contar do último fecho. */
+export function serieDeLucro(s: Estado): number {
+  let n = 0;
+  for (let i = s.historico.length - 1; i >= 0 && s.historico[i].receitas > s.historico[i].despesas; i--) n++;
+  return n;
+}
+
+// --- Melhorias: um ponto por nível ------------------------------------------
+
+export type IdMelhoria = 'marketing' | 'cafe' | 'recrutador' | 'renda' | 'agil' | 'qualidade' | 'premios'
+  | 'formacao' | 'fas' | 'investidores';
+
+export interface DefMelhoria {
+  icone: string;
+  nome: string;
+  descricao: string;
+  nivel: number; // nível mínimo da empresa
+}
+
+export const MELHORIAS: Record<IdMelhoria, DefMelhoria> = {
+  marketing: { icone: '📣', nome: 'Marketing digital', descricao: 'Os produtos novos vendem mais 15%.', nivel: 2 },
+  cafe: { icone: '☕', nome: 'Café de especialidade', descricao: 'Mais 5 de felicidade para toda a equipa.', nivel: 2 },
+  recrutador: { icone: '🧲', nome: 'Recrutador', descricao: 'Aparece mais um candidato todos os meses.', nivel: 3 },
+  renda: { icone: '🏷️', nome: 'Renda negociada', descricao: 'A renda baixa de 1 500 € para 900 € por mês.', nivel: 3 },
+  agil: { icone: '🔁', nome: 'Metodologia ágil', descricao: 'Equipas grandes perdem metade do rendimento na coordenação.', nivel: 4 },
+  qualidade: { icone: '🧪', nome: 'Testes automáticos', descricao: 'Mais 5 pontos de qualidade em cada lançamento.', nivel: 4 },
+  premios: { icone: '🎉', nome: 'Prémios de lançamento', descricao: 'Quem lança um produto ganha 15 de felicidade.', nivel: 5 },
+  formacao: { icone: '🎓', nome: 'Formação contínua', descricao: 'Todos melhoram 1 ponto na especialidade, todos os meses.', nivel: 5 },
+  fas: { icone: '❤️', nome: 'Fãs leais', descricao: 'As vendas dos produtos caem 40% mais devagar.', nivel: 6 },
+  investidores: { icone: '💼', nome: 'Ronda de investimento', descricao: 'Um investidor entra com 25 000 €, de uma vez.', nivel: 6 },
+};
+export const LISTA_MELHORIAS = Object.keys(MELHORIAS) as IdMelhoria[];
+
+export function temMelhoria(s: Estado, id: IdMelhoria): boolean {
+  return s.melhorias.includes(id);
+}
+
+/** Um ponto por cada nível acima do primeiro, menos os já gastos. */
+export function pontosMelhoria(s: Estado): number {
+  return nivelDaEmpresa(s) - 1 - s.melhorias.length;
+}
+
+export function bonusQualidade(s: Estado): number {
+  return temMelhoria(s, 'qualidade') ? 0.05 : 0;
+}
+
+export function comprarMelhoria(s: Estado, id: IdMelhoria): Resultado {
+  const m = MELHORIAS[id];
+  if (!m) return { ok: false };
+  if (temMelhoria(s, id)) return { ok: false, msg: 'Já tens esta melhoria.' };
+  if (nivelDaEmpresa(s) < m.nivel) return { ok: false, msg: `Precisa do nível ${m.nivel}.` };
+  if (pontosMelhoria(s) < 1) return { ok: false, msg: 'Não tens pontos de melhoria. Sobe de nível para ganhar mais.' };
+  s.melhorias.push(id);
+  if (id === 'investidores') s.dinheiro += 25000;
+  if (id === 'recrutador') s.candidatos.push(novoCandidato(s));
+  mensagem(s, `${m.icone} Melhoria nova: ${m.nome}.`, 'desbloqueio');
+  verificarMissoes(s);
+  return { ok: true };
+}
+
+// --- Missões: três de cada vez, com dinheiro e experiência ------------------
+
+export type TipoMissao = 'contratar' | 'sala' | 'lancar' | 'qualidade' | 'faturar' | 'tipo' | 'decorar' | 'caixa'
+  | 'feliz' | 'equipa';
+
+export interface Missao {
+  id: number;
+  tipo: TipoMissao;
+  alvo: number;
+  software?: TipoSoftware; // só na missão 'tipo'
+  desde: number; // minuto em que começou: os lançamentos e os fechos contam a partir daqui
+  dinheiro: number; // recompensa
+  xp: number;
+}
+
+export const MISSOES_ATIVAS = 3;
+
+/** Recompensas (afinadas com o simtest ligado às missões: o jogo fica mais generoso, mas mantém o vale). */
+export const RECOMPENSAS = { dinheiroBase: -2000, dinheiroPorNivel: 1000, xpBase: 80, xpPorNivel: 20 };
+
+export const TEXTO_MISSAO: Record<TipoMissao, { icone: string; texto: (m: Missao) => string }> = {
+  contratar: { icone: '🤝', texto: (m) => `Tem ${m.alvo} funcionários` },
+  sala: { icone: '📐', texto: (m) => (m.alvo === 1 ? 'Constrói uma sala fechada' : `Tem ${m.alvo} salas fechadas`) },
+  lancar: { icone: '🚀', texto: (m) => (m.alvo === 1 ? 'Lança um produto' : `Lança ${m.alvo} produtos`) },
+  qualidade: { icone: '💎', texto: (m) => `Lança um produto com qualidade de ${m.alvo}% ou mais` },
+  faturar: { icone: '💰', texto: (m) => `Fatura ${euros(m.alvo)} num só mês` },
+  tipo: { icone: '🧰', texto: (m) => `Lança um ${TIPOS[m.software ?? 'utilitario'].nome.toLowerCase()}` },
+  decorar: { icone: '🪴', texto: (m) => `Tem ${m.alvo} objetos de decoração` },
+  caixa: { icone: '🏦', texto: (m) => `Junta ${euros(m.alvo)} em caixa` },
+  feliz: { icone: '😄', texto: (m) => `Felicidade média de ${m.alvo} (3 pessoas ou mais)` },
+  equipa: { icone: '👥', texto: (m) => `Põe ${m.alvo} pessoas no mesmo projeto` },
+};
+
+export function descricaoMissao(m: Missao): string {
+  return TEXTO_MISSAO[m.tipo].texto(m);
+}
+
+// As três primeiras ensinam o jogo; depois vão rodando.
+const ORDEM_MISSOES: TipoMissao[] = ['contratar', 'sala', 'lancar', 'qualidade', 'faturar', 'tipo', 'decorar',
+  'caixa', 'feliz', 'equipa'];
+
+/** Arredonda para cima, com 2 algarismos significativos (12 345 → 13 000). */
+function redondo(v: number): number {
+  const p = 10 ** Math.max(0, Math.floor(Math.log10(Math.max(1, v))) - 1);
+  return Math.ceil(v / p) * p;
+}
+
+const lancadosDesde = (s: Estado, m: Missao) => s.produtos.filter((p) => p.lancadoEm >= m.desde);
+
+/** Onde está a missão: o valor atual e o alvo. */
+export function progressoMissao(s: Estado, m: Missao): { atual: number; alvo: number } {
+  let atual = 0;
+  switch (m.tipo) {
+    case 'contratar': atual = s.funcionarios.length; break;
+    case 'sala': atual = detetarSalas(s).total; break;
+    case 'lancar': atual = lancadosDesde(s, m).length; break;
+    case 'qualidade': atual = Math.round(Math.max(0, ...lancadosDesde(s, m).map((p) => p.qualidade)) * 100); break;
+    case 'faturar': atual = Math.max(0, ...s.historico
+      .filter((r) => (r.mes + 1) * MIN_POR_MES > m.desde).map((r) => Math.round(r.receitas))); break;
+    case 'tipo': atual = lancadosDesde(s, m).filter((p) => p.tipo === m.software).length; break;
+    case 'decorar': atual = s.objetos.length; break;
+    case 'caixa': atual = Math.round(s.dinheiro); break;
+    case 'feliz': atual = s.funcionarios.length >= 3
+      ? Math.round(s.funcionarios.reduce((t, f) => t + f.felicidade, 0) / s.funcionarios.length) : 0; break;
+    case 'equipa': atual = Math.max(0, ...s.projetos.map((p) => membrosDe(s, p.id).length)); break;
+  }
+  return { atual: Math.max(0, atual), alvo: m.alvo };
+}
+
+/** O alvo de uma missão deste tipo agora (null se não faz sentido neste momento). */
+function alvoMissao(s: Estado, tipo: TipoMissao, nivel: number): { alvo: number; software?: TipoSoftware } | null {
+  const n = s.funcionarios.length;
+  switch (tipo) {
+    case 'contratar': return n >= 40 ? null : { alvo: n === 0 ? 2 : n + 1 + Math.floor(nivel / 4) };
+    case 'sala': { const salas = detetarSalas(s).total; return salas >= 8 ? null : { alvo: salas + 1 }; }
+    case 'lancar': return { alvo: 1 + Math.floor(nivel / 5) };
+    case 'qualidade': return n === 0 ? null : { alvo: Math.min(95, 60 + 5 * Math.floor(nivel / 2)) };
+    case 'faturar': {
+      if (s.produtos.length === 0) return null;
+      const melhor = Math.max(0, ...s.historico.map((r) => r.receitas));
+      return { alvo: redondo(Math.max(3000, melhor * 1.25)) };
+    }
+    case 'tipo': {
+      const tipos = LISTA_TIPOS.filter((t) => tipoDisponivel(s, t));
+      if (n === 0 || tipos.length < 2) return null;
+      const conta = (t: TipoSoftware) => s.produtos.filter((p) => p.tipo === t).length;
+      const software = tipos.reduce((a, b) => (conta(b) < conta(a) ? b : a));
+      return { alvo: 1, software };
+    }
+    case 'decorar': return s.objetos.length >= 30 ? null : { alvo: s.objetos.length + 2 + Math.floor(nivel / 3) };
+    case 'caixa': return { alvo: redondo(Math.max(20000, s.dinheiro * 1.6)) };
+    case 'feliz': return n < 3 ? null : { alvo: Math.min(95, 80 + nivel) };
+    case 'equipa': {
+      const alvo = Math.min(n, 3 + Math.floor(nivel / 3));
+      const atual = Math.max(0, ...s.projetos.map((p) => membrosDe(s, p.id).length));
+      return n < 3 || alvo <= atual ? null : { alvo };
+    }
+  }
+}
+
+/** A próxima missão da rotação que faça sentido e ainda não esteja ativa nem cumprida. */
+function novaMissao(s: Estado): Missao | null {
+  const nivel = nivelDaEmpresa(s);
+  for (let k = 0; k < ORDEM_MISSOES.length; k++) {
+    const tipo = ORDEM_MISSOES[(s.proximaMissao + k) % ORDEM_MISSOES.length];
+    if (s.missoes.some((m) => m.tipo === tipo)) continue;
+    const a = alvoMissao(s, tipo, nivel);
+    if (!a) continue;
+    const m: Missao = {
+      id: s.proximaMissao + k, tipo, alvo: a.alvo, desde: s.minuto,
+      dinheiro: Math.max(0, redondo(RECOMPENSAS.dinheiroBase + RECOMPENSAS.dinheiroPorNivel * (nivel - 1))),
+      xp: RECOMPENSAS.xpBase + RECOMPENSAS.xpPorNivel * nivel,
+    };
+    if (a.software) m.software = a.software;
+    const p = progressoMissao(s, m);
+    if (p.atual >= p.alvo) continue;
+    s.proximaMissao += k + 1;
+    m.id = s.proximaMissao;
+    return m;
+  }
+  return null;
+}
+
+/** Enche a lista até haver três missões (quando há missões que façam sentido). */
+function completarMissoes(s: Estado): void {
+  if (!s.comMissoes) return;
+  while (s.missoes.length < MISSOES_ATIVAS) {
+    const m = novaMissao(s);
+    if (!m) return;
+    s.missoes.push(m);
+  }
+}
+
+/** Paga as missões cumpridas e põe outras no lugar. */
+export function verificarMissoes(s: Estado): Missao[] {
+  if (!s.comMissoes || s.falencia) return [];
+  const feitas = s.missoes.filter((m) => { const p = progressoMissao(s, m); return p.atual >= p.alvo; });
+  for (const m of feitas) {
+    s.missoes = s.missoes.filter((o) => o !== m);
+    s.missoesFeitas++;
+    s.dinheiro += m.dinheiro;
+    mensagem(s, `🎯 Missão cumprida: ${descricaoMissao(m)}! ${m.dinheiro ? `+${euros(m.dinheiro)} e ` : ''}+${m.xp} XP.`, 'missao');
+    ganharXp(s, m.xp);
+  }
+  completarMissoes(s);
+  return feitas;
+}
+
+// --- Críticas: notas de 1 a 10 à volta da qualidade, sem o aleatório do jogo ---
+
+export const CRITICOS = ['Bits & Bytes', 'Revista PC', 'TecnoBlog', 'Pixel Diário'];
+
+function hashTexto(texto: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < texto.length; i++) h = Math.imul(h ^ texto.charCodeAt(i), 0x01000193);
+  return (h >>> 0) / 4294967296;
+}
+
+export function criticasPara(nome: string, qualidade: number, minuto: number): number[] {
+  return CRITICOS.map((_, i) => {
+    const nota = qualidade * 10 + (hashTexto(`${nome}|${minuto}|${i}`) - 0.5) * 2.6;
+    return Math.max(1, Math.min(10, Math.round(nota)));
+  });
+}
+
+/** Frase do veredicto para uma nota média. */
+export function veredicto(media: number): string {
+  return media >= 9 ? 'Obra-prima!' : media >= 7.5 ? 'Grande sucesso' : media >= 6 ? 'Bem recebido'
+    : media >= 4 ? 'Morno' : 'Um fracasso';
 }

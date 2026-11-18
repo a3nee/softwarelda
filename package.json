@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "sim": "node src/simrun.ts && node src/simtest.ts",
+    "sim": "node src/simrun.ts && node src/simtest.ts && node src/simtest.ts --missoes",
     "simtest": "node src/simtest.ts"
   },
   "dependencies": {
