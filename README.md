@@ -2,15 +2,19 @@
 
 Protótipo de um jogo de gestão de uma empresa de software em 3D, inspirado no *Software Inc.*
 
-**Stack:** TypeScript + Three.js + Vite. Sem outras dependências: o `npm run sim` usa o suporte nativo
-do Node (≥ 22.18) para correr TypeScript.
+**Stack:** TypeScript + Three.js + Vite, numa app de ambiente de trabalho com **Electron**. O `npm run sim` usa o
+suporte nativo do Node (≥ 22.18) para correr TypeScript. Outras dependências: `@dgreenheck/ez-tree` (árvores
+procedurais, MIT) e, só para desenvolvimento, `electron`, `electron-builder` e `fbx2gltf` (conversão dos avatares).
 
 ## Comandos
 
 | Comando         | O que faz                                                    |
 |-----------------|--------------------------------------------------------------|
 | `npm install`   | Instala as dependências                                      |
-| `npm run dev`   | Servidor de desenvolvimento (abre em http://localhost:5173)  |
+| `npm run app`   | Build + abre o jogo na janela da app (Electron)               |
+| `npm run app:dev` | App com o Vite por trás (recarrega ao editar; F12 = DevTools) |
+| `npm run dist`  | Build + instalador para Windows em `release/`                  |
+| `npm run dev`   | Só o servidor de desenvolvimento no browser (http://localhost:5173) |
 | `npx tsc`       | Verificação de tipos                                         |
 | `npm run build` | Verificação de tipos + build de produção em `dist/`          |
 | `npm run sim`   | Testes da lógica + cenários de equilíbrio (falha se algo falhar) |
@@ -21,7 +25,10 @@ do Node (≥ 22.18) para correr TypeScript.
 - `src/sim.ts` — toda a lógica de jogo (tempo, economia, funcionários, construção). **Não importa Three.js**
   nem o DOM, para poder ser testada em Node.
 - `src/main.ts` — liga tudo: cena 3D, ferramentas de construção, HUD, painel lateral, avisos, ficha e ciclo.
-- `src/modelos.ts` — modelos 3D (secretárias, decoração, bonecos animados, confetes). Só Three.js.
+- `src/recursos.ts` — carrega os modelos glTF, as pessoas, as animações e as texturas PBR (com barra de progresso).
+- `src/arranque.ts` — ecrã de carregamento e arranque do jogo.
+- `src/pessoas.ts` — funcionários com avatares reais animados (andar, trabalhar, sentado, festejar).
+- `src/modelos.ts` — secretária, cadeira, decoração e confetes, em escala real (metros). Só Three.js.
 - `src/ambiente.ts` — céu com ciclo dia/noite, sol com sombras, relva, estrada com carros, árvores, prédios, nuvens.
 - `src/menus.ts` — menus em ecrã inteiro: principal, nova empresa, pausa, definições, como jogar, conquistas.
 - `src/definicoes.ts` — definições do jogador (`localStorage`, chave `software-lda.definicoes`).
@@ -34,6 +41,10 @@ do Node (≥ 22.18) para correr TypeScript.
 - `src/simrun.ts` — testes da lógica (caminhos, salas, tipos, dependências, mercado, equipas, guardar/carregar,
   decoração, conquistas, eventos), sem 3D.
 - `src/simtest.ts` — equilíbrio da economia: jogadores automáticos durante 2 anos, com 8 sementes, e metas a cumprir.
+- `electron/` — `main.cjs` (janela, ecrã inteiro com F11, protocolo `app://` para o `dist/`, GPU dedicada),
+  `preload.cjs` e `lancar.mjs` (arranca a app; com `SL_CAPTURA`/`SL_EVAL` tira uma captura para testes).
+- `ferramentas/` — scripts que descarregam e convertem os recursos (`rocketbox.mjs`, `polyhaven.mjs`, `icone.cjs`).
+- `public/modelos`, `public/texturas` — recursos 3D; licenças e autores em `public/CREDITOS.txt`.
 
 ## Menus e interface
 
@@ -72,12 +83,21 @@ do Node (≥ 22.18) para correr TypeScript.
 
 ## Gráficos
 
-Sombras PCF do sol, tone mapping ACES, céu e luzes que mudam com a hora (candeeiros e janelas acendem à noite),
-alcatifas coloridas nas salas, secretárias com monitor que acende na cor da especialidade de quem trabalha
-(azul programação, rosa design, verde testes), bonecos com camisola da cor da especialidade que andam e se
-sentam a escrever, e um losango por cima da cabeça com a felicidade (verde ≥ 70, amarelo ≥ 40, vermelho).
-Na qualidade alta há brilho (bloom) nos ecrãs, losangos, candeeiros, janelas e partículas; na média, só a vinheta e
-a saturação. De quem trabalha sobem símbolos da sua área (`</>`, ◆, ✓); no fecho de um mês com lucro sai um repuxo
+Tudo em escala real (1 célula = 1,67 m, paredes com 2,3 m) e com materiais PBR:
+
+- **Pessoas reais**: 12 avatares do Microsoft Rocketbox (MIT), 6 homens e 6 mulheres, com animações de captura de
+  movimento para andar, trabalhar ao computador, estar sentado, parado e festejar.
+- **Mobiliário e cidade**: plantas, carro de café, candeeiros de rua e outros modelos do Poly Haven (CC0); sofá das
+  amostras da Khronos (CC-BY 4.0); árvores procedurais (ez-tree) que ondulam com o vento; carros e prédios.
+- **Texturas PBR** (Poly Haven, CC0): soalho e espinha nas salas, laje de betão, paredes estucadas, relva, asfalto,
+  passeio, tijolo.
+- **Luz**: céu físico com sol e lua que mudam com a hora, luz de ambiente gerada a partir do céu, sombras 4096,
+  candeeiros e janelas acesos à noite, tone mapping ACES.
+- **Pós-processamento** (qualidade alta): oclusão de ambiente (GTAO), brilho (bloom) nos ecrãs, losangos, candeeiros
+  e partículas, vinheta e saturação; na média, só a vinheta e a saturação.
+- **Corte das paredes**: as paredes entre a câmara e o que se está a ver baixam até um murete, para se ver lá dentro.
+- Secretárias com monitor que acende na cor da especialidade de quem trabalha (azul programação, rosa design, verde
+  testes) e um losango por cima da cabeça com a felicidade (verde ≥ 70, amarelo ≥ 40, vermelho). De quem trabalha sobem símbolos da sua área (`</>`, ◆, ✓); no fecho de um mês com lucro sai um repuxo
 de moedas e o saldo sobe no ecrã.
 
 ## Controlos
@@ -124,7 +144,7 @@ obstáculos (menos a de destino), tal como a decoração. Quando o mapa muda, qu
 funcionário fica **Sem acesso à secretária** (espera à entrada) ou **Preso** (vai para casa à meia-noite); as duas
 situações baixam a felicidade.
 
-Em `npm run dev` ficam disponíveis na consola `__jogo` (estado), `__camara`, `__controlos` e `__ecra(x, z)`
+Em `npm run dev` / `npm run app:dev` ficam disponíveis na consola `__jogo` (estado), `__camara`, `__controlos`, `__renderer` e `__ecra(x, z)`
 (vértice da grelha → píxeis).
 
 ## Regras do jogo (atuais)
