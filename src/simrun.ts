@@ -9,6 +9,8 @@ import {
   bonusDecoracao, colocarObjeto, CONQUISTAS, DECORACAO, DIFICULDADES, EVENTOS, OBJETOS, objetoEm,
   removerObjeto, verificarConquistas, alvoFelicidade, comprarMelhoria, coordenacaoDe, criticasPara, ganharXp,
   nivelDaEmpresa, pontosMelhoria, rendaDe, verificarMissoes, xpDeLancamento, xpParaNivel, XP_CONQUISTA,
+  avaliarEmpresa, rankingEmpresas, posicaoNoRanking, vendasFuturas, podeLevantar, levantarRonda, valorDaRonda,
+  lancarCampanha, hypeComCampanha, aceitarContrato, pagamentoDoContrato,
   type Estado, type TipoSoftware, type Trabalhador,
 } from './sim.ts';
 
@@ -453,6 +455,133 @@ verificar(cenarioSala(false) === 'semAcesso', 'sem porta fica sem acesso');
     verificarMissoes(r2.estado);
     verificar(r2.estado.missoes.length === 3, 'e as missões aparecem na primeira verificação');
   }
+}
+
+// --- Avaliação, concorrentes e ranking ---
+{
+  const s = novoJogo(7);
+  const a = avaliarEmpresa(s);
+  verificar(a.total === 25000 && a.caixa === 25000, 'uma empresa nova vale o que tem em caixa');
+  verificar(s.rivais.length === 6 && new Set(s.rivais.map((r) => r.nome)).size === 6, 'há 6 concorrentes com nomes diferentes');
+  const r = rankingEmpresas(s);
+  verificar(r.length === 7 && r.every((l, i) => i === 0 || r[i - 1].valor >= l.valor), 'o ranking tem 7 empresas por ordem de valor');
+  verificar(posicaoNoRanking(s) === 7, 'uma empresa nova começa em último lugar');
+  verificar(r.filter((l) => l.jogador).length === 1 && r.find((l) => l.jogador)!.nome === s.nome, 'o jogador aparece uma vez no ranking');
+
+  const sem = novoJogo(7);
+  sem.rivais = [];
+  avancar(s, MIN_POR_MES);
+  avancar(sem, MIN_POR_MES);
+  verificar(s.semente === sem.semente, 'os concorrentes e os contratos não usam o gerador aleatório');
+  const outro = novoJogo(7);
+  avancar(outro, MIN_POR_MES);
+  verificar(JSON.stringify(outro.rivais) === JSON.stringify(s.rivais), 'os concorrentes são determinísticos');
+  verificar(s.rivais.every((x) => x.historico.length === 1), 'cada concorrente regista o fecho do mês');
+  verificar(s.historico[0].valor === avaliarEmpresa(s).total, 'o fecho do mês regista a avaliação da empresa');
+  verificar(s.ofertas.length === 3 && s.ofertas.every((o) => o.trabalho > 0 && o.pagamento > 0 && o.prazoDias >= 15),
+    'há 3 ofertas de contrato por mês');
+  verificar(JSON.stringify(s.ofertas) === JSON.stringify(outro.ofertas), 'as ofertas são determinísticas');
+
+  s.produtos.push({ nome: 'X', tipo: 'utilitario', funcionalidades: [], qualidade: 0.8, vendasMes: 8000, receitaTotal: 0, lancadoEm: 0 });
+  verificar(avaliarEmpresa(s).produtos === Math.round(vendasFuturas(8000, TIPOS.utilitario.queda) / 100) * 100,
+    'os produtos valem as vendas futuras descontadas');
+  verificar(vendasFuturas(8000, 0.8) > 8000 * 3 && vendasFuturas(8000, 0.8) < 8000 / 0.2, 'vendas futuras entre 3 meses e a soma infinita');
+}
+
+// --- Investidores ---
+{
+  const s = novoJogo(9);
+  s.dinheiro = 100000;
+  verificar(!podeLevantar(s, 'semente').ok, 'a ronda semente precisa do nível 3');
+  s.xp = xpParaNivel(3);
+  verificar(!podeLevantar(s, 'serieA').ok, 'a série A precisa da ronda semente primeiro');
+  const v = valorDaRonda(s, 'semente');
+  const d0 = s.dinheiro;
+  verificar(v > 0 && levantarRonda(s, 'semente').ok && s.dinheiro === d0 + v && Math.abs(s.participacao - 0.1) < 1e-9,
+    'a ronda semente vende 10% da empresa por dinheiro');
+  verificar(!levantarRonda(s, 'semente').ok, 'cada ronda só se faz uma vez');
+  s.produtos.push({ nome: 'X', tipo: 'utilitario', funcionalidades: [], qualidade: 0.8, vendasMes: 8000, receitaTotal: 0, lancadoEm: 0 });
+  const antes = s.dinheiro;
+  avancar(s, MIN_POR_MES - (s.minuto % MIN_POR_MES));
+  const lucro = 8000 - rendaDe(s);
+  verificar(s.dinheiro === antes + lucro - Math.round(lucro * 0.1), 'os investidores ficam com a sua parte do lucro do mês');
+}
+
+// --- Campanhas de marketing ---
+{
+  const s = novoJogo(11);
+  s.dinheiro = 1e6;
+  colocarSecretaria(s, 3, 3);
+  contratar(s, 0);
+  iniciarProjeto(s, 'Calc', 'utilitario');
+  const gemeo = importarJogo(exportarJogo(s));
+  verificar(gemeo.ok, 'o jogo com campanhas é copiado');
+  const p = s.projetos[0];
+  verificar(lancarCampanha(s, p.id, 'redes').ok && Math.abs(p.hype! - 0.12) < 1e-9, 'as redes sociais dão 12% de expectativa');
+  verificar(!lancarCampanha(s, p.id, 'redes').ok, 'cada campanha só uma vez por projeto');
+  verificar(!lancarCampanha(s, p.id, 'imprensa').ok, 'a imprensa precisa do nível 3');
+  s.xp = xpParaNivel(6);
+  lancarCampanha(s, p.id, 'imprensa');
+  lancarCampanha(s, p.id, 'feira');
+  const esperado = hypeComCampanha(hypeComCampanha(0.12, 'imprensa'), 'feira');
+  verificar(Math.abs(p.hype! - esperado) < 1e-9 && p.hype! < 0.12 + 0.3 + 0.6 && p.hype! <= 1, 'as campanhas somam cada vez menos');
+  if (gemeo.ok) {
+    const g = gemeo.estado;
+    for (let i = 0; i < 200 && s.produtos.length === 0; i++) { avancar(s, MIN_POR_DIA); avancar(g, MIN_POR_DIA); }
+    verificar(s.produtos.length === 1 && g.produtos.length === 1
+      && Math.abs(s.produtos[0].vendasMes / g.produtos[0].vendasMes - (1 + esperado)) < 1e-9,
+    'o lançamento vende × (1 + expectativa)');
+  }
+}
+
+// --- Contratos de clientes ---
+{
+  const s = novoJogo(5);
+  s.dinheiro = 1e6;
+  colocarSecretaria(s, 3, 3);
+  colocarSecretaria(s, 5, 3);
+  contratar(s, 0);
+  contratar(s, 0);
+  const o = s.ofertas[0];
+  verificar(!aceitarContrato(s, o.id, []).ok, 'um contrato precisa de equipa');
+  verificar(aceitarContrato(s, o.id, s.funcionarios.map((f) => f.id)).ok && s.ofertas.length === 2, 'aceitar um contrato tira-o das ofertas');
+  const p = s.projetos[0];
+  verificar(p.contrato?.pagamento === o.pagamento && p.trabalhoTotal === o.trabalho && membrosDe(s, p.id).length === 2,
+    'o contrato vira um projeto com a equipa');
+  verificar(!lancarCampanha(s, p.id, 'redes').ok, 'os contratos não têm marketing');
+  verificar(!aceitarContrato(s, o.id, s.funcionarios.map((f) => f.id)).ok, 'a mesma oferta não se aceita duas vezes');
+  for (let i = 0; i < 150 && s.projetos.length; i++) avancar(s, MIN_POR_DIA);
+  verificar(s.projetos.length === 0 && s.produtos.length === 0 && s.contratosFeitos === 1, 'entregar um contrato não cria um produto');
+  verificar(s.conquistas.includes('contrato') && semProjeto(s).length === 2, 'a equipa fica livre e a conquista desbloqueia');
+  avancar(s, MIN_POR_MES - (s.minuto % MIN_POR_MES));
+  verificar(s.historico[s.historico.length - 1].receitas > 0 && s.extraMes === 0, 'o pagamento entra nas receitas do mês');
+  const c = { cliente: 'X', pagamento: 10000, prazo: 0 };
+  verificar(pagamentoDoContrato(c, 1) === 10000 && pagamentoDoContrato(c, 0) === 7000
+    && pagamentoDoContrato({ ...c, atrasado: true }, 1) === 6000, 'o pagamento depende da qualidade e do atraso');
+  const o2 = s.ofertas[0];
+  aceitarContrato(s, o2.id, [s.funcionarios[0].id]);
+  s.projetos[0].contrato!.prazo = s.minuto;
+  avancar(s, MIN_POR_DIA);
+  verificar(s.projetos[0].contrato!.atrasado === true, 'passado o prazo, o contrato fica atrasado');
+
+  // Guardar e carregar
+  const bom = exportarJogo(s);
+  const r = importarJogo(bom);
+  verificar(r.ok && r.estado.rivais.length === 6 && r.estado.projetos[0].contrato?.atrasado === true, 'concorrentes e contratos são guardados');
+  const estragar = (fn: (o: any) => void) => { const x = JSON.parse(bom); fn(x); return importarJogo(JSON.stringify(x)).ok; };
+  verificar(!estragar((x) => { x.estado.rivais[0].tipo = 'banco'; }), 'concorrente com tipo desconhecido é recusado');
+  verificar(!estragar((x) => { x.estado.participacao = 1; }), 'participação de 100% é recusada');
+  verificar(!estragar((x) => { x.estado.rondas = ['semente', 'semente']; }), 'ronda repetida é recusada');
+  verificar(!estragar((x) => { x.estado.ofertas[0].trabalho = -1; }), 'oferta estragada é recusada');
+  verificar(!estragar((x) => { x.estado.projetos[0].contrato.pagamento = 'muito'; }), 'contrato estragado é recusado');
+  verificar(!estragar((x) => { x.estado.projetos[0].campanhas = ['tv']; }), 'campanha desconhecida é recusada');
+  const v3 = JSON.parse(bom);
+  v3.versao = 3;
+  v3.estado.minuto = 5 * MIN_POR_MES + 100;
+  for (const k of ['sementeMundo', 'rivais', 'participacao', 'rondas', 'ofertas', 'contratosFeitos', 'extraMes']) delete v3.estado[k];
+  const r3 = importarJogo(JSON.stringify(v3));
+  verificar(r3.ok && r3.estado.rivais.length === 6 && r3.estado.rivais.every((x) => x.historico.length === 5)
+    && r3.estado.participacao === 0, 'um save da versão 3 carrega, com os concorrentes já nos meses que passaram');
 }
 
 console.log(`Testes: ${testes} OK`);

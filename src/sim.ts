@@ -283,6 +283,9 @@ export interface Projeto {
   trabalhoTotal: number;
   feito: Competencias; // pontos feitos em cada área (o total de cada área é trabalhoTotal × areas do tipo)
   somaQualidade: Competencias; // Σ rendimento × competência, por área, para calcular a qualidade
+  hype?: number; // 0–1: as vendas do lançamento são × (1 + hype). Sobe com as campanhas de marketing
+  campanhas?: IdCampanha[]; // campanhas já feitas (cada uma só uma vez por projeto)
+  contrato?: ContratoAtivo; // trabalho por encomenda: paga no fim e não vira produto
 }
 
 export interface Produto {
@@ -298,7 +301,7 @@ export interface Produto {
 
 /** Para a interface escolher cor, som e se mostra um aviso flutuante. */
 export type TipoMensagem = 'info' | 'aviso' | 'lancamento' | 'desbloqueio' | 'conquista' | 'evento' | 'mes' | 'falencia'
-  | 'nivel' | 'missao';
+  | 'nivel' | 'missao' | 'rival' | 'contrato' | 'investimento';
 
 export interface Mensagem {
   minuto: number;
@@ -364,6 +367,7 @@ export interface RegistoMes {
   receitas: number;
   despesas: number;
   dinheiro: number; // em caixa depois do fecho
+  valor?: number; // avaliação da empresa depois do fecho (os saves antigos não a têm)
 }
 
 export interface Estado {
@@ -396,6 +400,13 @@ export interface Estado {
   missoes: Missao[]; // ativas (até 3)
   missoesFeitas: number;
   proximaMissao: number; // quantas missões já foram geradas (escolhe a próxima)
+  sementeMundo: number; // fixa: decide concorrentes e contratos sem tocar no gerador aleatório
+  rivais: Rival[];
+  participacao: number; // parte da empresa (0–1) que já pertence a investidores
+  rondas: IdRonda[];
+  ofertas: OfertaContrato[]; // contratos de clientes disponíveis este mês
+  contratosFeitos: number;
+  extraMes: number; // receitas deste mês fora das vendas (contratos), para o histórico
 }
 
 // ---------------------------------------------------------------------------
@@ -460,7 +471,15 @@ export function novoJogo(semente = 12345, largura = 24, altura = 18, opcoes: Opc
     missoes: [],
     missoesFeitas: 0,
     proximaMissao: 0,
+    sementeMundo: semente,
+    rivais: criarRivais(semente),
+    participacao: 0,
+    rondas: [],
+    ofertas: [],
+    contratosFeitos: 0,
+    extraMes: 0,
   };
+  gerarOfertas(s);
   gerarCandidatos(s);
   completarMissoes(s);
   mensagem(s, `Bem-vindo à ${nome}! Coloca secretárias e contrata a tua equipa.`);
@@ -1023,6 +1042,7 @@ function simularAteAcabar(
 }
 
 function lancarProjeto(s: Estado, p: Projeto): void {
+  if (p.contrato) return entregarContrato(s, p);
   const qualidade = Math.min(1, qualidadeDoProjeto(p) + bonusQualidade(s));
   const mercado = fatorMercado(s, p.tipo);
   const marketing = temMelhoria(s, 'marketing') ? 1.15 : 1;
@@ -1031,7 +1051,7 @@ function lancarProjeto(s: Estado, p: Projeto): void {
     tipo: p.tipo,
     funcionalidades: p.funcionalidades,
     qualidade,
-    vendasMes: vendasIniciais(p.tipo, p.funcionalidades, qualidade, mercado) * marketing,
+    vendasMes: vendasIniciais(p.tipo, p.funcionalidades, qualidade, mercado) * marketing * (1 + (p.hype ?? 0)),
     receitaTotal: 0,
     lancadoEm: s.minuto,
     criticas: criticasPara(p.nome, qualidade, s.minuto),
@@ -1213,7 +1233,7 @@ function andar(f: Funcionario): boolean {
 // ---------------------------------------------------------------------------
 
 // Versão 2: nome da empresa, dificuldade, eventos, decoração, histórico e conquistas.
-export const VERSAO_SAVE = 3;
+export const VERSAO_SAVE = 4;
 
 export interface Save {
   versao: number;
@@ -1240,6 +1260,7 @@ export function importarJogo(texto: string): ResultadoCarregar {
   if (o.versao > VERSAO_SAVE) return { ok: false, msg: 'Este jogo foi guardado numa versão mais recente.' };
   if (o.versao < 2 && objeto(o.estado)) migrarDaVersao1(o.estado);
   if (o.versao < 3 && objeto(o.estado)) migrarDaVersao2(o.estado);
+  if (o.versao < 4 && objeto(o.estado)) migrarDaVersao3(o.estado);
   const erro = erroNoEstado(o.estado);
   if (erro) return { ok: false, msg: `Jogo guardado inválido: ${erro}.` };
   return { ok: true, estado: o.estado as Estado, guardadoEm: typeof o.guardadoEm === 'number' ? o.guardadoEm : 0 };
@@ -1263,6 +1284,23 @@ function migrarDaVersao2(e: Record<string, unknown>): void {
   e.missoes ??= [];
   e.missoesFeitas ??= 0;
   e.proximaMissao ??= 0;
+}
+
+/** Os campos que a versão 4 acrescentou: os concorrentes aparecem já com os meses que passaram. */
+function migrarDaVersao3(e: Record<string, unknown>): void {
+  const semente = numero(e.semente) ? e.semente | 0 : 12345;
+  e.sementeMundo ??= semente;
+  if (e.rivais === undefined) {
+    const rivais = criarRivais(e.sementeMundo as number);
+    const mes = numero(e.minuto) ? Math.floor(e.minuto / MIN_POR_MES) : 0;
+    for (let m = 1; m <= Math.min(mes, 600); m++) for (const r of rivais) passoDoRival(r, e.sementeMundo as number, m);
+    e.rivais = rivais;
+  }
+  e.participacao ??= 0;
+  e.rondas ??= [];
+  e.ofertas ??= [];
+  e.contratosFeitos ??= 0;
+  e.extraMes ??= 0;
 }
 
 /** Mês de jogo em que estamos (0 = o primeiro); muda no fecho de cada mês. */
@@ -1318,6 +1356,12 @@ function erroNoEstado(e: unknown): string | null {
       || !validarFuncionalidades(p.tipo as TipoSoftware, p.funcionalidades as string[]).ok) return 'funcionalidades do projeto';
     if (!numero(p.trabalhoFeito) || !numero(p.trabalhoTotal) || p.trabalhoTotal <= 0) return 'trabalho do projeto';
     if (!competenciasValidas(p.feito) || !competenciasValidas(p.somaQualidade)) return 'áreas do projeto';
+    if (p.hype !== undefined && !(numero(p.hype) && p.hype >= 0 && p.hype <= HYPE_MAXIMO)) return 'hype do projeto';
+    if (p.campanhas !== undefined && !(Array.isArray(p.campanhas) && p.campanhas.every((c) => typeof c === 'string' && c in CAMPANHAS)
+      && new Set(p.campanhas).size === p.campanhas.length)) return 'campanhas do projeto';
+    const c = p.contrato;
+    if (c !== undefined && !(objeto(c) && typeof c.cliente === 'string' && numero(c.pagamento) && c.pagamento >= 0
+      && numero(c.prazo) && (c.atrasado === undefined || typeof c.atrasado === 'boolean'))) return 'contrato do projeto';
     if (projetos.has(p.id as number)) return 'projeto repetido';
     projetos.add(p.id as number);
   }
@@ -1363,7 +1407,8 @@ function erroNoEstado(e: unknown): string | null {
     ocupadas.add(c);
   }
   for (const r of e.historico as unknown[])
-    if (!objeto(r) || !numero(r.mes) || !numero(r.receitas) || !numero(r.despesas) || !numero(r.dinheiro)) return 'histórico';
+    if (!objeto(r) || !numero(r.mes) || !numero(r.receitas) || !numero(r.despesas) || !numero(r.dinheiro)
+      || (r.valor !== undefined && !numero(r.valor))) return 'histórico';
   if (!(e.conquistas as unknown[]).every((c) => typeof c === 'string')) return 'conquistas';
   if (!numero(e.xp) || e.xp < 0) return 'experiência';
   const melhorias = e.melhorias;
@@ -1376,6 +1421,23 @@ function erroNoEstado(e: unknown): string | null {
     if (!objeto(m) || !inteiro(m.id) || typeof m.tipo !== 'string' || !(m.tipo in TEXTO_MISSAO) || !numero(m.alvo)
       || !numero(m.desde) || !numero(m.dinheiro) || !numero(m.xp)
       || (m.software !== undefined && !(typeof m.software === 'string' && m.software in TIPOS))) return 'missão';
+  if (!numero(e.sementeMundo)) return 'campo «sementeMundo» em falta';
+  if (!Array.isArray(e.rivais) || e.rivais.length > 20) return 'lista «rivais»';
+  for (const r of e.rivais as unknown[])
+    if (!objeto(r) || !inteiro(r.id) || typeof r.nome !== 'string' || typeof r.tipo !== 'string' || !(r.tipo in TIPOS)
+      || !numero(r.valor) || r.valor < 0 || !numero(r.tendencia) || !inteiro(r.produtos)
+      || !Array.isArray(r.historico) || r.historico.length > HISTORICO_RIVAL || !r.historico.every(numero)) return 'concorrente';
+  if (!numero(e.participacao) || e.participacao < 0 || e.participacao >= 1) return 'participação dos investidores';
+  const rondas = e.rondas;
+  if (!Array.isArray(rondas) || !rondas.every((r) => typeof r === 'string' && r in RONDAS) || new Set(rondas).size !== rondas.length)
+    return 'rondas de investimento';
+  if (!Array.isArray(e.ofertas) || e.ofertas.length > 10) return 'lista «ofertas»';
+  for (const o of e.ofertas as unknown[])
+    if (!objeto(o) || !inteiro(o.id) || typeof o.cliente !== 'string' || typeof o.encomenda !== 'string'
+      || typeof o.tipo !== 'string' || !(o.tipo in TIPOS) || !numero(o.trabalho) || o.trabalho <= 0
+      || !numero(o.pagamento) || o.pagamento < 0 || !numero(o.prazoDias) || o.prazoDias <= 0) return 'oferta de contrato';
+  if (!inteiro(e.contratosFeitos) || e.contratosFeitos < 0) return 'contador de contratos';
+  if (!numero(e.extraMes)) return 'campo «extraMes» em falta';
   return null;
 }
 
@@ -1442,6 +1504,11 @@ function fimDoDia(s: Estado): void {
     const alvo = alvoFelicidade(s, f, salas);
     f.felicidade += Math.sign(alvo - f.felicidade) * Math.min(2, Math.abs(alvo - f.felicidade));
   }
+  for (const p of s.projetos)
+    if (p.contrato && !p.contrato.atrasado && s.minuto > p.contrato.prazo) {
+      p.contrato.atrasado = true;
+      mensagem(s, `⏰ O prazo de «${p.nome}» passou: o cliente vai pagar menos (−${Math.round((1 - CONTRATOS.multaAtraso) * 100)}%).`, 'aviso');
+    }
   verificarConquistas(s);
 }
 
@@ -1455,21 +1522,30 @@ function fimDoMes(s: Estado): void {
   }
   const salarios = s.funcionarios.reduce((t, f) => t + f.salario, 0);
   const despesas = salarios + rendaDe(s);
-  s.dinheiro += receitas - despesas;
-  mensagem(s, `Fecho do mês: receitas ${euros(receitas)}, despesas ${euros(despesas)}.`, 'mes');
-  s.historico.push({ mes: mesDeJogo(s) - 1, receitas, despesas, dinheiro: s.dinheiro });
+  const extra = s.extraMes;
+  s.extraMes = 0;
+  // Os investidores ficam com a sua parte do lucro do mês.
+  const lucro = receitas + extra - despesas;
+  const dividendos = s.participacao > 0 && lucro > 0 ? Math.round(lucro * s.participacao) : 0;
+  s.dinheiro += receitas - despesas - dividendos;
+  mensagem(s, `Fecho do mês: receitas ${euros(receitas + extra)}, despesas ${euros(despesas)}`
+    + (dividendos ? `, dividendos aos investidores ${euros(dividendos)}` : '') + '.', 'mes');
+  s.historico.push({ mes: mesDeJogo(s) - 1, receitas: receitas + extra, despesas: despesas + dividendos, dinheiro: s.dinheiro });
   if (s.historico.length > 240) s.historico.shift();
   if (temMelhoria(s, 'formacao')) for (const f of s.funcionarios) {
     const a = AREAS.reduce((m, o) => (f.competencias[o] > f.competencias[m] ? o : m), AREAS[0]);
     f.competencias[a] = Math.min(1, Math.round((f.competencias[a] + 0.01) * 100) / 100);
   }
-  if (receitas > despesas) ganharXp(s, 20 * Math.min(5, serieDeLucro(s)));
+  if (receitas + extra > despesas + dividendos) ganharXp(s, 20 * Math.min(5, serieDeLucro(s)));
   gerarCandidatos(s);
   if (s.dinheiro < ECON.limiteFalencia) {
     s.falencia = true;
     mensagem(s, 'Falência! A empresa ficou sem dinheiro.', 'falencia');
     return;
   }
+  s.historico[s.historico.length - 1].valor = avaliarEmpresa(s).total;
+  atualizarRivais(s);
+  gerarOfertas(s);
   if (s.eventos && aleatorio(s) < PROBABILIDADE_EVENTO) eventoAleatorio(s);
   verificarConquistas(s);
 }
@@ -1623,6 +1699,14 @@ export const CONQUISTAS: Conquista[] = [
     cumprida: (s) => mesDeJogo(s) >= 12 },
   { id: 'ano5', icone: '🏆', nome: 'Veterano', descricao: 'Chega ao fim do quinto ano.',
     cumprida: (s) => mesDeJogo(s) >= 60 },
+  { id: 'contrato', icone: '🤝', nome: 'Ao serviço do cliente', descricao: 'Entrega o primeiro contrato de um cliente.',
+    cumprida: (s) => s.contratosFeitos >= 1 },
+  { id: 'podio', icone: '🥉', nome: 'No pódio', descricao: 'Entra no top 3 do ranking de empresas.',
+    cumprida: (s) => posicaoNoRanking(s) <= 3 },
+  { id: 'lider', icone: '🥇', nome: 'Número um', descricao: 'Lidera o ranking de empresas.',
+    cumprida: (s) => posicaoNoRanking(s) === 1 },
+  { id: 'avaliacao1m', icone: '🦄', nome: 'Avaliada em milhões', descricao: 'A empresa vale 1 000 000 € ou mais.',
+    cumprida: (s) => avaliarEmpresa(s).total >= 1000000 },
 ];
 
 /** Desbloqueia as conquistas cumpridas (com uma mensagem cada) e devolve as novas. */
@@ -1913,4 +1997,362 @@ export function criticasPara(nome: string, qualidade: number, minuto: number): n
 export function veredicto(media: number): string {
   return media >= 9 ? 'Obra-prima!' : media >= 7.5 ? 'Grande sucesso' : media >= 6 ? 'Bem recebido'
     : media >= 4 ? 'Morno' : 'Um fracasso';
+}
+
+// ---------------------------------------------------------------------------
+// Avaliação da empresa, concorrentes e ranking. Nada disto usa o gerador aleatório
+// (os concorrentes vêm de hashes da sementeMundo), por isso o equilíbrio não muda.
+// ---------------------------------------------------------------------------
+
+export const AVALIACAO = {
+  mesesFuturos: 24, // meses de vendas futuras que contam
+  desconto: 0.97, // cada mês futuro vale 3% menos do que o anterior
+  porPessoa: 14000, // uma pessoa com competência média 1 e felicidade 100
+  porNivel: 3000,
+  porConquista: 1500,
+  porSucesso: 2500, // por produto com média das críticas de 7,5 ou mais
+  ativos: 0.6, // secretárias e decoração valem 60% do que custaram
+  projetos: 0.5, // um projeto vale metade das vendas futuras previstas × a parte já feita
+};
+
+export interface Avaliacao {
+  caixa: number;
+  produtos: number; // vendas futuras dos produtos à venda
+  projetos: number; // projetos e contratos em curso
+  equipa: number;
+  marca: number; // nível, conquistas e sucessos de crítica
+  ativos: number; // escritório
+  total: number;
+}
+
+function quedaEfetiva(s: Estado, tipo: TipoSoftware): number {
+  const q = TIPOS[tipo].queda;
+  return temMelhoria(s, 'fas') ? q + (1 - q) * 0.4 : q;
+}
+
+/** Soma descontada das vendas dos próximos meses de um produto que vende `vendasMes` agora. */
+export function vendasFuturas(vendasMes: number, queda: number): number {
+  let total = 0, v = vendasMes, d = 1;
+  for (let m = 0; m < AVALIACAO.mesesFuturos; m++) {
+    total += v * d;
+    v *= queda;
+    d *= AVALIACAO.desconto;
+  }
+  return total;
+}
+
+export function avaliarEmpresa(s: Estado): Avaliacao {
+  const produtos = s.produtos.reduce((t, p) => t + vendasFuturas(p.vendasMes, quedaEfetiva(s, p.tipo)), 0);
+  const projetos = s.projetos.reduce((t, p) => {
+    const feito = Math.min(1, p.trabalhoFeito / p.trabalhoTotal);
+    if (p.contrato) return t + feito * p.contrato.pagamento;
+    const q = Math.max(0.4, Math.min(1, qualidadeDoProjeto(p) + bonusQualidade(s)));
+    const vendas = vendasIniciais(p.tipo, p.funcionalidades, q, fatorMercado(s, p.tipo)) * (1 + (p.hype ?? 0));
+    return t + feito * AVALIACAO.projetos * vendasFuturas(vendas, quedaEfetiva(s, p.tipo));
+  }, 0);
+  const equipa = s.funcionarios.reduce((t, f) =>
+    t + competenciaMedia(f.competencias) * AVALIACAO.porPessoa * (0.6 + 0.4 * f.felicidade / 100), 0);
+  const sucessos = s.produtos.filter((p) => p.criticas && p.criticas.reduce((a, b) => a + b, 0) / p.criticas.length >= 7.5).length;
+  const marca = (nivelDaEmpresa(s) - 1) * AVALIACAO.porNivel + s.conquistas.length * AVALIACAO.porConquista
+    + sucessos * AVALIACAO.porSucesso;
+  const ativos = AVALIACAO.ativos * (s.secretarias.length * ECON.custoSecretaria
+    + s.objetos.reduce((t, o) => t + OBJETOS[o.tipo].custo, 0));
+  const r = (v: number) => Math.round(v / 100) * 100;
+  const a = { caixa: r(s.dinheiro), produtos: r(produtos), projetos: r(projetos), equipa: r(equipa), marca: r(marca), ativos: r(ativos) };
+  return { ...a, total: Math.max(0, a.caixa + a.produtos + a.projetos + a.equipa + a.marca + a.ativos) };
+}
+
+export interface Rival {
+  id: number;
+  nome: string;
+  tipo: TipoSoftware; // em que é especialista
+  valor: number;
+  tendencia: number; // crescimento médio por mês
+  produtos: number; // lançados desde o início do jogo
+  historico: number[]; // avaliação nos últimos fechos de mês
+}
+
+export const HISTORICO_RIVAL = 24;
+const NOMES_RIVAIS = ['ByteNorte', 'Lusitânia Soft', 'Atlântico Apps', 'Cortiça Labs', 'Galo Interactive',
+  'Bacalhau Bits', 'Tejo Systems', 'Pastel de Código', 'Serra Digital', 'Azulejo Studios'];
+const VALORES_RIVAIS = [45000, 120000, 280000, 650000, 1500000, 3400000];
+const PREFIXOS = ['Nuvem', 'Turbo', 'Pixel', 'Quantum', 'Zen', 'Hiper', 'Ultra', 'Nova'];
+const SUFIXOS: Record<TipoSoftware, string[]> = {
+  utilitario: ['Calc', 'Sync', 'Limpa', 'Zip'],
+  editor: ['Notas', 'Escreve', 'Docs', 'Pad'],
+  antivirus: ['Guarda', 'Escudo', 'Seguro', 'Cofre'],
+  jogo: ['Quest', 'Corrida', 'Lendas', 'Saga'],
+};
+
+const h = (texto: string) => hashTexto(texto);
+
+function criarRivais(semente: number): Rival[] {
+  const nomes = [...NOMES_RIVAIS].sort((a, b) => h(`${semente}|nome|${a}`) - h(`${semente}|nome|${b}`));
+  return VALORES_RIVAIS.map((v, i) => {
+    const x = h(`${semente}|rival|${i}`);
+    return {
+      id: i + 1,
+      nome: nomes[i],
+      tipo: LISTA_TIPOS[Math.floor(h(`${semente}|tipo|${i}`) * LISTA_TIPOS.length)],
+      valor: Math.round((v * (0.85 + 0.3 * x)) / 1000) * 1000,
+      tendencia: (0.034 - 0.004 * i) * (0.6 + 0.8 * h(`${semente}|tendencia|${i}`)), // as pequenas crescem mais depressa
+      produtos: 0,
+      historico: [],
+    };
+  });
+}
+
+/** Um mês na vida de um concorrente. Devolve o que aconteceu, para as notícias. */
+function passoDoRival(r: Rival, semente: number, mes: number): { lancou?: string; crise?: boolean } {
+  const base = `${semente}|${r.id}|${mes}`;
+  const x = h(base + '|var');
+  let variacao = r.tendencia + (x - 0.5) * 0.1;
+  const out: { lancou?: string; crise?: boolean } = {};
+  if (h(base + '|lanca') < 0.12) {
+    variacao += 0.04 + 0.08 * h(base + '|sucesso');
+    r.produtos++;
+    const pre = PREFIXOS[Math.floor(h(base + '|pre') * PREFIXOS.length)];
+    const suf = SUFIXOS[r.tipo][Math.floor(h(base + '|suf') * 4)];
+    out.lancou = `${pre}${suf}${r.produtos > 1 ? ` ${r.produtos}` : ''}`;
+  } else if (x < 0.04) {
+    variacao -= 0.15;
+    out.crise = true;
+  }
+  r.valor = Math.max(5000, Math.round((r.valor * (1 + variacao)) / 100) * 100);
+  r.historico.push(r.valor);
+  if (r.historico.length > HISTORICO_RIVAL) r.historico.shift();
+  return out;
+}
+
+function atualizarRivais(s: Estado): void {
+  const mes = mesDeJogo(s);
+  for (const r of s.rivais) {
+    const o = passoDoRival(r, s.sementeMundo, mes);
+    if (o.lancou) mensagem(s, `📣 A ${r.nome} lançou «${o.lancou}», um ${TIPOS[r.tipo].nome.toLowerCase()} novo.`, 'rival');
+    else if (o.crise) mensagem(s, `📉 A ${r.nome} anunciou despedimentos: a avaliação caiu.`, 'rival');
+  }
+}
+
+export interface LugarRanking {
+  nome: string;
+  valor: number;
+  variacao: number; // em relação ao fecho anterior (0,05 = +5%)
+  jogador: boolean;
+  tipo: TipoSoftware | null;
+  historico: number[];
+}
+
+export function rankingEmpresas(s: Estado): LugarRanking[] {
+  const valor = avaliarEmpresa(s).total;
+  const hist = s.historico.filter((r) => r.valor !== undefined).map((r) => r.valor!).slice(-HISTORICO_RIVAL);
+  const antes = hist.length ? hist[hist.length - 1] : valor;
+  const lista: LugarRanking[] = s.rivais.map((r) => {
+    const a = r.historico.length > 1 ? r.historico[r.historico.length - 2] : r.valor;
+    return { nome: r.nome, valor: r.valor, variacao: a ? r.valor / a - 1 : 0, jogador: false, tipo: r.tipo, historico: r.historico };
+  });
+  lista.push({ nome: s.nome, valor, variacao: antes ? valor / antes - 1 : 0, jogador: true, tipo: null, historico: hist });
+  return lista.sort((a, b) => b.valor - a.valor || (a.jogador ? -1 : 1));
+}
+
+export function posicaoNoRanking(s: Estado): number {
+  return rankingEmpresas(s).findIndex((l) => l.jogador) + 1;
+}
+
+// ---------------------------------------------------------------------------
+// Investidores: vende-se uma parte da empresa por dinheiro já; em troca, eles ficam
+// com essa parte do lucro de cada mês (dividendos).
+// ---------------------------------------------------------------------------
+
+export type IdRonda = 'semente' | 'serieA' | 'serieB';
+
+export interface DefRonda {
+  nome: string;
+  descricao: string;
+  nivel: number;
+  avaliacaoMinima: number;
+  parte: number; // da empresa (0–1)
+}
+
+export const RONDAS: Record<IdRonda, DefRonda> = {
+  semente: { nome: 'Ronda semente', descricao: 'Business angels apostam numa empresa jovem.', nivel: 3, avaliacaoMinima: 60000, parte: 0.1 },
+  serieA: { nome: 'Série A', descricao: 'Um fundo de capital de risco entra para acelerar o crescimento.', nivel: 8, avaliacaoMinima: 300000, parte: 0.15 },
+  serieB: { nome: 'Série B', descricao: 'Investidores internacionais para conquistar o mercado.', nivel: 14, avaliacaoMinima: 1500000, parte: 0.2 },
+};
+export const LISTA_RONDAS = Object.keys(RONDAS) as IdRonda[];
+export const DESCONTO_RONDA = 0.8; // os investidores pagam 80% do que a parte vale
+
+export function valorDaRonda(s: Estado, id: IdRonda): number {
+  return Math.round((RONDAS[id].parte * avaliarEmpresa(s).total * DESCONTO_RONDA) / 500) * 500;
+}
+
+/** Se a ronda pode ser feita agora (ok) ou porquê não (msg). */
+export function podeLevantar(s: Estado, id: IdRonda): Resultado {
+  const d = RONDAS[id];
+  if (!d) return { ok: false, msg: 'Ronda desconhecida.' };
+  if (s.rondas.includes(id)) return { ok: false, msg: 'Esta ronda já foi feita.' };
+  const i = LISTA_RONDAS.indexOf(id);
+  if (i > 0 && !s.rondas.includes(LISTA_RONDAS[i - 1])) return { ok: false, msg: `Primeiro a ${RONDAS[LISTA_RONDAS[i - 1]].nome}.` };
+  if (nivelDaEmpresa(s) < d.nivel) return { ok: false, msg: `Precisa do nível ${d.nivel}.` };
+  if (avaliarEmpresa(s).total < d.avaliacaoMinima) return { ok: false, msg: `A empresa tem de valer ${euros(d.avaliacaoMinima)}.` };
+  return { ok: true };
+}
+
+export function levantarRonda(s: Estado, id: IdRonda): Resultado {
+  const r = podeLevantar(s, id);
+  if (!r.ok) return r;
+  const valor = valorDaRonda(s, id);
+  s.dinheiro += valor;
+  s.participacao = 1 - (1 - s.participacao) * (1 - RONDAS[id].parte);
+  s.rondas.push(id);
+  mensagem(s, `💼 ${RONDAS[id].nome}: os investidores pagaram ${euros(valor)} por ${Math.round(RONDAS[id].parte * 100)}% da empresa.`, 'investimento');
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Campanhas de marketing: durante o desenvolvimento, gastar dinheiro para criar expectativa
+// (hype). Cada campanha soma menos quando já há muita expectativa.
+// ---------------------------------------------------------------------------
+
+export type IdCampanha = 'redes' | 'imprensa' | 'feira';
+
+export interface DefCampanha {
+  nome: string;
+  icone: string;
+  descricao: string;
+  custo: number;
+  hype: number;
+  nivel: number;
+}
+
+export const CAMPANHAS: Record<IdCampanha, DefCampanha> = {
+  redes: { nome: 'Redes sociais', icone: '📱', descricao: 'Anúncios e influenciadores.', custo: 1500, hype: 0.12, nivel: 1 },
+  imprensa: { nome: 'Imprensa', icone: '📰', descricao: 'Artigos e entrevistas nas revistas de tecnologia.', custo: 4000, hype: 0.3, nivel: 3 },
+  feira: { nome: 'Feira de tecnologia', icone: '🎪', descricao: 'Um stand na maior feira do país.', custo: 9000, hype: 0.6, nivel: 6 },
+};
+export const LISTA_CAMPANHAS = Object.keys(CAMPANHAS) as IdCampanha[];
+export const HYPE_MAXIMO = 1;
+
+/** Hype depois desta campanha (sobe menos quando já há muito). */
+export function hypeComCampanha(hype: number, id: IdCampanha): number {
+  return Math.min(HYPE_MAXIMO, hype + CAMPANHAS[id].hype * (1 - hype / HYPE_MAXIMO));
+}
+
+export function lancarCampanha(s: Estado, projetoId: number, id: IdCampanha): Resultado {
+  const p = s.projetos.find((o) => o.id === projetoId);
+  const d = CAMPANHAS[id];
+  if (!p || !d) return { ok: false };
+  if (p.contrato) return { ok: false, msg: 'Os contratos de clientes não precisam de marketing.' };
+  if (p.campanhas?.includes(id)) return { ok: false, msg: 'Essa campanha já foi feita para este projeto.' };
+  if (nivelDaEmpresa(s) < d.nivel) return { ok: false, msg: `Precisa do nível ${d.nivel}.` };
+  if (s.dinheiro < d.custo) return { ok: false, msg: `Precisas de ${euros(d.custo)}.` };
+  s.dinheiro -= d.custo;
+  p.hype = hypeComCampanha(p.hype ?? 0, id);
+  (p.campanhas ??= []).push(id);
+  mensagem(s, `${d.icone} Campanha «${d.nome}» para «${p.nome}»: expectativa +${Math.round(p.hype * 100)}% nas vendas do lançamento.`);
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Contratos de clientes: trabalho por encomenda, com prazo. Pagam no fim (menos se
+// atrasado) e não viram produto. Três ofertas novas por mês, decididas por hash.
+// ---------------------------------------------------------------------------
+
+export interface OfertaContrato {
+  id: number;
+  cliente: string;
+  encomenda: string;
+  tipo: TipoSoftware; // perfil de trabalho por áreas
+  trabalho: number;
+  pagamento: number;
+  prazoDias: number;
+}
+
+export interface ContratoAtivo {
+  cliente: string;
+  pagamento: number; // com qualidade 100% e dentro do prazo
+  prazo: number; // minuto de jogo
+  atrasado?: boolean;
+}
+
+export const CONTRATOS = {
+  ofertas: 3,
+  multaAtraso: 0.6, // atrasado, o cliente paga 60%
+  pontosPorDia: 13000 / DIAS_POR_MES, // o que 2 pessoas médias fazem (para o prazo)
+  folgaPrazo: 1.6,
+};
+
+const CLIENTES = ['Câmara Municipal de Braga', 'Pastelaria Aurora', 'Clínica Sorriso', 'Banco do Minho',
+  'Escola Secundária do Lumiar', 'Hotel Ribeira', 'Clube Desportivo da Amadora', 'Farmácia Central',
+  'Transportes do Tejo', 'Quinta dos Vinhos do Douro', 'Livraria Bertrand de Bairro', 'Ginásio Atlas'];
+const ENCOMENDAS: { nome: string; tipo: TipoSoftware; trabalho: number }[] = [
+  { nome: 'Site institucional', tipo: 'editor', trabalho: 9000 },
+  { nome: 'Aplicação de reservas', tipo: 'utilitario', trabalho: 14000 },
+  { nome: 'Sistema de faturação', tipo: 'utilitario', trabalho: 22000 },
+  { nome: 'Auditoria de segurança', tipo: 'antivirus', trabalho: 12000 },
+  { nome: 'Jogo promocional', tipo: 'jogo', trabalho: 18000 },
+  { nome: 'Loja online', tipo: 'editor', trabalho: 16000 },
+  { nome: 'Migração de dados', tipo: 'utilitario', trabalho: 8000 },
+];
+
+function gerarOfertas(s: Estado): void {
+  const mes = mesDeJogo(s);
+  const escala = 1 + Math.min(mes, 36) * 0.04;
+  s.ofertas = [];
+  for (let i = 0; i < CONTRATOS.ofertas; i++) {
+    const base = `${s.sementeMundo}|oferta|${mes}|${i}`;
+    const e = ENCOMENDAS[Math.floor(h(base + '|enc') * ENCOMENDAS.length)];
+    const trabalho = Math.round((e.trabalho * escala * (0.85 + 0.3 * h(base + '|trab'))) / 500) * 500;
+    s.ofertas.push({
+      id: mes * 10 + i + 1,
+      cliente: CLIENTES[Math.floor(h(base + '|cli') * CLIENTES.length)],
+      encomenda: e.nome,
+      tipo: e.tipo,
+      trabalho,
+      pagamento: Math.round((trabalho * (0.8 + 0.35 * h(base + '|pag'))) / 100) * 100,
+      prazoDias: Math.max(15, Math.ceil((trabalho / CONTRATOS.pontosPorDia) * CONTRATOS.folgaPrazo / 5) * 5),
+    });
+  }
+}
+
+export function aceitarContrato(s: Estado, ofertaId: number, equipa: number[]): Resultado {
+  const o = s.ofertas.find((x) => x.id === ofertaId);
+  if (!o) return { ok: false, msg: 'Esta oferta já não está disponível.' };
+  if (equipa.length === 0) return { ok: false, msg: 'Escolhe pelo menos uma pessoa para a equipa.' };
+  if (equipa.some((id) => !s.funcionarios.some((f) => f.id === id))) return { ok: false, msg: 'Funcionário desconhecido.' };
+  const id = s.proximoId++;
+  s.projetos.push({
+    id,
+    nome: `${o.encomenda} · ${o.cliente}`,
+    tipo: o.tipo,
+    funcionalidades: [],
+    trabalhoFeito: 0,
+    trabalhoTotal: o.trabalho,
+    feito: { programacao: 0, design: 0, testes: 0 },
+    somaQualidade: { programacao: 0, design: 0, testes: 0 },
+    contrato: { cliente: o.cliente, pagamento: o.pagamento, prazo: s.minuto + o.prazoDias * MIN_POR_DIA },
+  });
+  s.ofertas = s.ofertas.filter((x) => x !== o);
+  for (const fid of equipa) definirEquipa(s, fid, id);
+  mensagem(s, `📝 Contrato assinado com ${o.cliente}: ${o.encomenda.toLowerCase()} em ${o.prazoDias} dias, por ${euros(o.pagamento)}.`, 'contrato');
+  return { ok: true };
+}
+
+/** Quanto o cliente paga, dada a qualidade (0–1) e o atraso. */
+export function pagamentoDoContrato(c: ContratoAtivo, qualidade: number): number {
+  return Math.round((c.pagamento * (0.7 + 0.3 * qualidade) * (c.atrasado ? CONTRATOS.multaAtraso : 1)) / 10) * 10;
+}
+
+function entregarContrato(s: Estado, p: Projeto): void {
+  const c = p.contrato!;
+  const qualidade = Math.min(1, qualidadeDoProjeto(p) + bonusQualidade(s));
+  const pago = pagamentoDoContrato(c, qualidade);
+  s.dinheiro += pago;
+  s.extraMes += pago;
+  s.contratosFeitos++;
+  s.projetos = s.projetos.filter((o) => o !== p);
+  for (const f of membrosDe(s, p.id)) f.projetoId = null;
+  mensagem(s, `✅ Entregaste «${p.nome}»${c.atrasado ? ' com atraso' : ' a tempo'} (qualidade ${Math.round(qualidade * 100)}%): `
+    + `${c.cliente} pagou ${euros(pago)}. A equipa está livre.`, 'contrato');
+  ganharXp(s, 30 + Math.round(qualidade * 30));
+  verificarConquistas(s);
 }
