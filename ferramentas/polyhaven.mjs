@@ -8,12 +8,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const UA = { 'User-Agent': 'SoftwareLda/1.0 (jogo pessoal)' };
-const MODELOS = ['potted_plant_02', 'potted_plant_04', 'CoffeeCart_01', 'street_lamp_01'];
+const MODELOS = ['potted_plant_02', 'potted_plant_04', 'CoffeeCart_01', 'street_lamp_01', 'modular_street_seating', 'wooden_picnic_table'];
 const TEXTURAS = [
-  'laminate_floor_02', 'herringbone_parquet', 'concrete_floor_worn_001', 'painted_plaster_wall', 'leafy_grass', 'asphalt_02',
+  'laminate_floor_02', 'herringbone_parquet', 'large_floor_tiles_02', 'painted_plaster_wall', 'leafy_grass', 'asphalt_02',
   'pavement_04', 'brick_wall_001', 'concrete_wall_006', 'ash_veneer',
 ];
-const KHRONOS = [['GlamVelvetSofa', 'Eric Chadwick (Wayfair), CC-BY 4.0']];
+const KHRONOS = [['GlamVelvetSofa', 'Eric Chadwick (Wayfair), CC-BY 4.0'], ['CarConcept', 'Eric Chadwick (Darmstadt Graphics Group), CC-BY 4.0']];
 
 async function obter(url, destino) {
   if (fs.existsSync(destino) && fs.statSync(destino).size > 0) return;

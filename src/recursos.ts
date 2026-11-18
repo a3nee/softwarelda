@@ -2,6 +2,7 @@
 // Khronos) e texturas PBR. Sem lógica de jogo. Ver ferramentas/ para a origem de cada ficheiro.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 /** Unidades do mundo por metro: uma célula da grelha mede 1/M ≈ 1,67 m. */
 export const M = 0.6;
@@ -44,9 +45,16 @@ const MODELOS: Record<string, string> = {
   cafe: 'modelos/CoffeeCart_01/CoffeeCart_01.gltf',
   candeeiro: 'modelos/street_lamp_01/street_lamp_01.gltf',
   sofa: 'modelos/GlamVelvetSofa/GlamVelvetSofa.glb',
+  banco: 'modelos/modular_street_seating/modular_street_seating.gltf',
+  mesaPiquenique: 'modelos/wooden_picnic_table/wooden_picnic_table.gltf',
+  carro: 'modelos/CarConcept/CarConcept.glb',
+};
+/** Peças a tirar de modelos que vêm como kit (o banco traz um segundo banco, sem encosto, e conectores soltos). */
+const SEM_PECAS: Record<string, string[]> = {
+  banco: ['suspended_support_02', 'seat_bench', 'connector_60', 'connector_45', 'connector_90', 'connector_30'],
 };
 export const TEXTURAS = [
-  'laminate_floor_02', 'herringbone_parquet', 'concrete_floor_worn_001', 'painted_plaster_wall', 'leafy_grass',
+  'laminate_floor_02', 'herringbone_parquet', 'large_floor_tiles_02', 'painted_plaster_wall', 'leafy_grass',
   'asphalt_02', 'pavement_04', 'brick_wall_001', 'concrete_wall_006', 'ash_veneer',
 ] as const;
 export type IdTextura = (typeof TEXTURAS)[number];
@@ -97,6 +105,52 @@ function prepararModelo(o: THREE.Object3D): THREE.Object3D {
     if ((m as THREE.Mesh).isMesh) m.castShadow = m.receiveShadow = true;
   });
   g.userData.tamanho = caixa.getSize(new THREE.Vector3());
+  return g;
+}
+
+/**
+ * Carro da Khronos: o vidro perde a transmissão (que obrigava a desenhar a cena outra vez em cada imagem),
+ * as 97 malhas juntam-se numa por material e o carro fica virado para +z (a frente é o lado dos faróis).
+ */
+function prepararCarro(raiz: THREE.Object3D): THREE.Object3D {
+  const vidro = new THREE.MeshPhysicalMaterial({
+    name: 'Glass', color: 0x0c1016, metalness: 0, roughness: 0.04, clearcoat: 1, transparent: true, opacity: 0.6,
+    side: THREE.DoubleSide,
+  });
+  raiz.updateMatrixWorld(true);
+  const porMaterial = new Map<THREE.Material, THREE.BufferGeometry[]>();
+  raiz.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh || Array.isArray(m.material)) return;
+    let material = m.material as THREE.MeshPhysicalMaterial;
+    if (material.transmission > 0) material = vidro;
+    if (material.iridescence) material.iridescence = 0;
+    const lista = porMaterial.get(material) ?? [];
+    lista.push(m.geometry.clone().applyMatrix4(m.matrixWorld));
+    porMaterial.set(material, lista);
+  });
+  const carro = new THREE.Group();
+  for (const [material, gs] of porMaterial) {
+    const comuns = Object.keys(gs[0].attributes).filter((n) => gs.every((g) => g.attributes[n]));
+    const indexadas = gs.every((g) => g.index);
+    const limpas = gs.map((g) => {
+      for (const n of Object.keys(g.attributes)) if (!comuns.includes(n)) g.deleteAttribute(n);
+      g.morphAttributes = {};
+      return indexadas || !g.index ? g : g.toNonIndexed();
+    });
+    const junta = limpas.length > 1 ? mergeGeometries(limpas, false) : limpas[0];
+    for (const g of junta ? [junta] : limpas) {
+      const malha = new THREE.Mesh(g, material);
+      malha.name = material.name;
+      carro.add(malha);
+    }
+  }
+  const centro = new THREE.Box3().setFromObject(carro).getCenter(new THREE.Vector3());
+  const farol = carro.children.find((c) => c.name === 'Headlight');
+  const frente = farol ? new THREE.Box3().setFromObject(farol).getCenter(new THREE.Vector3()).sub(centro) : new THREE.Vector3(0, 0, 1);
+  carro.rotation.y = -Math.atan2(frente.x, frente.z);
+  const g = new THREE.Group();
+  g.add(carro);
   return g;
 }
 
@@ -153,7 +207,8 @@ export async function carregarRecursos(progresso: (f: number) => void): Promise<
   for (const [nome, url] of Object.entries(MODELOS)) {
     tarefas.push(async () => {
       const r = await gltf.loadAsync(BASE + url);
-      R.modelos[nome] = prepararModelo(r.scene);
+      for (const peca of SEM_PECAS[nome] ?? []) r.scene.getObjectByName(peca)?.removeFromParent();
+      R.modelos[nome] = prepararModelo(nome === 'carro' ? prepararCarro(r.scene) : r.scene);
     });
   }
   for (const id of TEXTURAS) {

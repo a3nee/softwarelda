@@ -62,7 +62,7 @@ export class Ambiente {
   private readonly matLuz = mat(0x222222, { emissive: 0xffd9a0, emissiveIntensity: 0 });
   private readonly matJanelaAcesa = mat(0x222222, { emissive: 0xffd8a0, emissiveIntensity: 0, roughness: 0.4 });
   private readonly matPoca: THREE.MeshBasicMaterial;
-  private readonly carros: { o: THREE.Group; v: number }[] = [];
+  private readonly carros: { o: THREE.Object3D; v: number }[] = [];
   private readonly arvores: THREE.Object3D[] = [];
   /** Árvores geradas (fora da cena): animam o vento das folhas, que todas as cópias partilham. */
   private readonly especies: Tree[] = [];
@@ -266,12 +266,52 @@ export class Ambiente {
       this.cena.add(g);
       this.carros.push({ o: g, v: sentido * (5 + hash(i) * 3) });
     }
+    // Bancos de jardim na relva entre o passeio e o terreno, virados para a rua
+    const banco = R.modelos.banco;
+    if (banco) for (let z = -13; z <= altura + 12; z += 6) {
+      if (Math.abs(z - entrada.z) < 1.8) continue;
+      const b = banco.clone();
+      b.position.set(-2.35, -0.1, z);
+      b.rotation.y = -Math.PI / 2;
+      this.cena.add(b);
+    }
+    // Mesas de piquenique na relva do lado de lá do escritório
+    const mesa = R.modelos.mesaPiquenique;
+    if (mesa) for (const [z, r] of [[3.5, 0.25], [altura / 2 + 1, -0.15], [altura - 3, 0.1]] as const) {
+      const m = mesa.clone();
+      m.position.set(this.centro.x * 2 + 1.25, -0.1, z);
+      m.rotation.y = Math.PI / 2 + r;
+      this.cena.add(m);
+    }
   }
 
   private readonly matLuzes: THREE.MeshStandardMaterial[] = [];
 
   /** Carro de passeio (em metros: 4,4 × 1,8 × 1,45), com pintura com verniz, vidros escuros e faróis. */
-  private criarCarro(cor: number, i: number): THREE.Group {
+  private criarCarro(cor: number, i: number): THREE.Object3D {
+    // Modelo real (Khronos CarConcept), com a pintura de cada carro na sua cor
+    const base = R.modelos.carro;
+    if (base) {
+      const c = base.clone();
+      c.name = 'carro';
+      c.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh) return;
+        const material = m.material as THREE.MeshPhysicalMaterial;
+        if (/^Paint 1/.test(material.name)) {
+          const p = material.clone();
+          p.color.set(cor);
+          p.clearcoat = 1;
+          p.clearcoatRoughness = 0.05;
+          m.material = p;
+        } else if (material.name === 'Headlight') {
+          if (!this.matLuzes.includes(material)) this.matLuzes.push(material);
+        } else if (material.name === 'Brakelight' || material.name === 'Signallight') {
+          material.emissiveIntensity = 0.6;
+        }
+      });
+      return c;
+    }
     const g = new THREE.Group();
     const m = new THREE.Group();
     m.scale.setScalar(M);

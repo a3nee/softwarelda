@@ -1,6 +1,7 @@
 // Cena 3D, construção, interface e menus. A lógica do jogo vive em sim.ts.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import {
   AREAS, alvoFelicidade, arestaMaisProxima, avancar, cancelarProjeto, colocarObjeto, colocarParedes, colocarPorta,
   colocarSecretaria, comDependencias, CONQUISTAS, contratar, definirEquipa, demolirArestas, despedir, detetarSalas,
@@ -166,13 +167,13 @@ const ambiente = new Ambiente(cena, renderer, LARGURA, ALTURA, s.entrada);
 const confetes = new Confetes(cena);
 const particulas = new Particulas(cena);
 const posfx = new PosFx(renderer, cena, camara);
-posfx.excluirDaOclusao(particulas.grupo, confetes.malha);
+posfx.excluirDaOclusao(particulas.grupo, confetes.malha, () => [imVidro]);
 
-// Chão: betão polido no espaço aberto; soalho ou parquet nas salas (com um tom por sala).
+// Chão: lajes de granito no espaço aberto (2 por célula, alinhadas com a grelha); soalho ou parquet nas salas.
 // Uma instância por célula em cada tipo de chão; a célula só aparece no tipo que lhe cabe.
 const geoCelula = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
 const PISOS = [
-  texturaNoMundo(materialPBR('concrete_floor_worn_001', 1, { color: 0xf2f0ec, roughness: 0.5 }), 0.56, 0.12),
+  texturaNoMundo(materialPBR('large_floor_tiles_02', 1, { color: 0xe6e3dc, roughness: 0.85 }), 2 / 3),
   texturaNoMundo(materialPBR('laminate_floor_02', 1, { roughness: 0.5 }), 0.98),
   texturaNoMundo(materialPBR('herringbone_parquet', 1, { roughness: 0.45 }), 0.49),
 ].map((m) => {
@@ -278,6 +279,32 @@ function colocarNaAresta(o: THREE.Object3D, a: Aresta, y = 0): void {
   }
 }
 
+// Janelas nas paredes que separam uma sala do exterior: peitoril, vidro com caixilho e padieira.
+const PEITORIL = 0.5; // ≈ 0,83 m
+const TOPO_JANELA = 1.2; // ≈ 2,0 m
+const geoPeitoril = new THREE.BoxGeometry(1 + ESPESSURA, PEITORIL, ESPESSURA);
+const geoPadieira = new THREE.BoxGeometry(1 + ESPESSURA, ALTURA_PAREDE - TOPO_JANELA, ESPESSURA);
+const geoVidro = new THREE.PlaneGeometry(1, TOPO_JANELA - PEITORIL);
+const geoCaixilhoH = new THREE.BoxGeometry(1 + ESPESSURA, 0.035, ESPESSURA + 0.025);
+const geoCaixilhoV = new THREE.BoxGeometry(0.035, TOPO_JANELA - PEITORIL, ESPESSURA + 0.025);
+const matCaixilho = mat(0x30343c, { roughness: 0.35, metalness: 0.7 });
+const matVidro = new THREE.MeshPhysicalMaterial({
+  color: 0xc9dbe8, metalness: 0, roughness: 0.03, transparent: true, opacity: 0.2, side: THREE.DoubleSide,
+  depthWrite: false, envMapIntensity: 1.4, emissive: 0xffd9a0, emissiveIntensity: 0,
+});
+/** Junta peças [geometria, x, y] numa só geometria. */
+function juntar(partes: [THREE.BufferGeometry, number, number][]): THREE.BufferGeometry {
+  return mergeGeometries(partes.map(([g, x, y]) => g.clone().translate(x, y, 0)))!;
+}
+// Com a base em y = 0, para a parede baixar a partir do chão.
+const geoParedeBase = geoParede.clone().translate(0, ALTURA_PAREDE / 2, 0);
+const geoJanelaParede = juntar([[geoPeitoril, 0, PEITORIL / 2], [geoPadieira, 0, (ALTURA_PAREDE + TOPO_JANELA) / 2]]);
+const geoJanelaCaixilho = juntar([
+  [geoCaixilhoH, 0, PEITORIL + 0.017], [geoCaixilhoH, 0, TOPO_JANELA - 0.017],
+  ...[-0.5, 0, 0.5].map((x): [THREE.BufferGeometry, number, number] => [geoCaixilhoV, x, (PEITORIL + TOPO_JANELA) / 2]),
+]);
+const geoJanelaVidro = geoVidro.clone().translate(0, (PEITORIL + TOPO_JANELA) / 2, 0);
+
 function criarPorta(): THREE.Group {
   const g = new THREE.Group();
   for (const lado of [-0.45, 0.45]) {
@@ -303,10 +330,61 @@ function todasAsArestas(): Aresta[] {
 }
 const ARESTAS = todasAsArestas();
 
+/**
+ * Paredes, janelas e topos: uma InstancedMesh por peça para o mapa inteiro (uma chamada de desenho em vez de
+ * uma por segmento, também nas sombras e na oclusão). As portas continuam a ser grupos.
+ */
+function instancias(geo: THREE.BufferGeometry, material: THREE.Material, sombra = true): THREE.InstancedMesh {
+  const im = new THREE.InstancedMesh(geo, material, ARESTAS.length);
+  im.count = 0;
+  im.castShadow = sombra;
+  im.receiveShadow = true;
+  im.frustumCulled = false;
+  cena.add(im);
+  return im;
+}
+const imParede = instancias(geoParedeBase, matParede);
+const imJanela = instancias(geoJanelaParede, matParede);
+const imCaixilho = instancias(geoJanelaCaixilho, matCaixilho);
+const imVidro = instancias(geoJanelaVidro, matVidro, false);
+imVidro.renderOrder = 3;
+const imTopo = instancias(geoTopoParede, matTopoParede);
+
 /** Paredes e portas desenhadas, para as baixar quando estão entre a câmara e o que se está a ver. */
-interface Parede3D { o: THREE.Object3D; topo: THREE.Object3D | null; x: number; z: number; tipo: 'v' | 'h'; porta: boolean; f: number }
+interface Parede3D {
+  aresta: Aresta;
+  x: number;
+  z: number;
+  f: number; // fração da altura (1 = inteira)
+  porta: THREE.Object3D | null;
+  janela: boolean;
+  i: number; // índice nas instâncias de paredes ou de janelas
+  topo: number; // índice nas instâncias de topos
+}
 const paredes3D: Parede3D[] = [];
 const ALTURA_CORTADA = 0.16; // fração da altura que fica (um murete)
+const RODA_V = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2);
+const RODA_H = new THREE.Quaternion();
+const mInst = new THREE.Matrix4();
+const pInst = new THREE.Vector3();
+const eInst = new THREE.Vector3();
+
+function colocarParede(p: Parede3D): void {
+  if (p.porta) {
+    p.porta.scale.y = p.f;
+    return;
+  }
+  const q = p.aresta.tipo === 'v' ? RODA_V : RODA_H;
+  mInst.compose(pInst.set(p.x, 0, p.z), q, eInst.set(1, p.f, 1));
+  if (p.janela) for (const im of [imJanela, imCaixilho, imVidro]) im.setMatrixAt(p.i, mInst);
+  else imParede.setMatrixAt(p.i, mInst);
+  mInst.compose(pInst.set(p.x, ALTURA_PAREDE * p.f + 0.02, p.z), q, eInst.set(1, 1, 1));
+  imTopo.setMatrixAt(p.topo, mInst);
+}
+
+function instanciasMudaram(): void {
+  for (const im of [imParede, imJanela, imCaixilho, imVidro, imTopo]) im.instanceMatrix.needsUpdate = true;
+}
 
 function cortarParedes(dt: number): void {
   const t = controlos.target;
@@ -315,25 +393,35 @@ function cortarParedes(dt: number): void {
   const dx = (c.x - t.x) / n;
   const dz = (c.z - t.z) / n;
   const k = Math.min(1, dt * 9);
+  let mudou = false;
   for (const p of paredes3D) {
     const doLadoDaCamara = (p.x - t.x) * dx + (p.z - t.z) * dz > -0.8;
-    const virada = p.tipo === 'h' ? Math.abs(dz) > 0.3 : Math.abs(dx) > 0.3;
+    const virada = p.aresta.tipo === 'h' ? Math.abs(dz) > 0.3 : Math.abs(dx) > 0.3;
     const alvo = doLadoDaCamara && virada ? ALTURA_CORTADA : 1;
     if (Math.abs(p.f - alvo) < 0.002) continue;
     p.f += (alvo - p.f) * k;
-    p.o.scale.y = p.f;
-    if (!p.porta) p.o.position.y = (ALTURA_PAREDE * p.f) / 2;
-    if (p.topo) p.topo.position.y = ALTURA_PAREDE * p.f + 0.02;
+    colocarParede(p);
+    mudou = true;
   }
+  if (mudou) instanciasMudaram();
 }
 
 let versaoDesenhada = -1;
 function sincronizarMapa(): void {
   if (versaoDesenhada === s.versaoMapa) return;
   versaoDesenhada = s.versaoMapa;
+  // O corte de cada parede mantém-se quando o mapa muda (não volta a subir de repente).
+  const corte = new Map(paredes3D.map((p) => [`${p.aresta.tipo}${p.aresta.x},${p.aresta.z}`, p.f]));
   grupoMapa.clear();
   ecras.clear();
   paredes3D.length = 0;
+  // Uma parede leva janela quando tem uma sala de um lado e o exterior do outro.
+  const salas = detetarSalas(s);
+  const salaEm = (x: number, z: number) => (x < 0 || z < 0 || x >= LARGURA || z >= ALTURA ? -1 : salas.sala[z * LARGURA + x]);
+  const exterior = (a: Aresta) => {
+    const [p, q] = a.tipo === 'v' ? [salaEm(a.x - 1, a.z), salaEm(a.x, a.z)] : [salaEm(a.x, a.z - 1), salaEm(a.x, a.z)];
+    return (p < 0) !== (q < 0);
+  };
   for (const d of s.secretarias) {
     const m = criarSecretaria(d.id);
     m.grupo.position.set(d.x, 0, d.z);
@@ -345,25 +433,32 @@ function sincronizarMapa(): void {
     g.position.set(o.x, 0, o.z);
     grupoMapa.add(g);
   }
+  let nParedes = 0;
+  let nJanelas = 0;
+  let nTopos = 0;
   for (const a of ARESTAS) {
     const v = lerAresta(s, a);
     if (v === NADA) continue;
+    const x = a.tipo === 'v' ? a.x - 0.5 : a.x;
+    const z = a.tipo === 'v' ? a.z : a.z - 0.5;
+    const f = corte.get(`${a.tipo}${a.x},${a.z}`) ?? 1;
+    let p: Parede3D;
     if (v === PORTA) {
-      const p = criarPorta();
-      colocarNaAresta(p, a);
-      grupoMapa.add(p);
-      paredes3D.push({ o: p, topo: null, x: p.position.x, z: p.position.z, tipo: a.tipo, porta: true, f: 1 });
+      const porta = criarPorta();
+      colocarNaAresta(porta, a);
+      grupoMapa.add(porta);
+      p = { aresta: a, x, z, f, porta, janela: false, i: -1, topo: -1 };
     } else {
-      const m = new THREE.Mesh(geoParede, matParede);
-      m.castShadow = m.receiveShadow = true;
-      colocarNaAresta(m, a, ALTURA_PAREDE / 2);
-      grupoMapa.add(m);
-      const topo = new THREE.Mesh(geoTopoParede, matTopoParede);
-      colocarNaAresta(topo, a, ALTURA_PAREDE + 0.02);
-      grupoMapa.add(topo);
-      paredes3D.push({ o: m, topo, x: m.position.x, z: m.position.z, tipo: a.tipo, porta: false, f: 1 });
+      const janela = exterior(a);
+      p = { aresta: a, x, z, f, porta: null, janela, i: janela ? nJanelas++ : nParedes++, topo: nTopos++ };
     }
+    paredes3D.push(p);
+    colocarParede(p);
   }
+  imParede.count = nParedes;
+  imJanela.count = imCaixilho.count = imVidro.count = nJanelas;
+  imTopo.count = nTopos;
+  instanciasMudaram();
   pintarChao();
 }
 
@@ -1903,6 +1998,7 @@ function ciclo(agora: number): void {
   }
   controlos.update(dt);
   posfx.intensidade(def.cicloDia ? ambiente.noite : 0);
+  matVidro.emissiveIntensity = (def.cicloDia ? ambiente.noite : 0) * 0.35;
   posfx.render();
   requestAnimationFrame(ciclo);
 }
@@ -1921,6 +2017,7 @@ if (import.meta.env.DEV) {
     __jogo: s,
     __camara: camara,
     __renderer: renderer,
+    __cena: cena,
     __controlos: controlos,
     __ecra: (vx: number, vz: number) => {
       const v = new THREE.Vector3(vx - 0.5, 0, vz - 0.5).project(camara);

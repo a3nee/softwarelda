@@ -43,7 +43,7 @@ export class PosFx {
   private readonly bloom: UnrealBloomPass;
   private readonly ao: GTAOPass;
   /** Objetos que não entram na oclusão (sprites e partículas: seriam quadrados escuros). */
-  private readonly semOclusao: THREE.Object3D[] = [];
+  private readonly semOclusao: (THREE.Object3D | (() => THREE.Object3D[]))[] = [];
   nivel: NivelFx = 'completo';
 
   constructor(renderer: THREE.WebGLRenderer, cena: THREE.Scene, camara: THREE.PerspectiveCamera) {
@@ -59,10 +59,11 @@ export class PosFx {
     this.ao.blendIntensity = 0.9;
     const renderAO = this.ao.render.bind(this.ao);
     this.ao.render = (...args: Parameters<GTAOPass['render']>) => {
-      const antes = this.semOclusao.map((o) => o.visible);
-      for (const o of this.semOclusao) o.visible = false;
+      const lista = this.semOclusao.flatMap((o) => (typeof o === 'function' ? o() : [o]));
+      const antes = lista.map((o) => o.visible);
+      for (const o of lista) o.visible = false;
       renderAO(...args);
-      this.semOclusao.forEach((o, i) => (o.visible = antes[i]));
+      lista.forEach((o, i) => (o.visible = antes[i]));
     };
     this.composer.addPass(this.ao);
     // Só o que brilha a sério passa o limiar (ecrãs, luzes, confetes); a luz do sol fica de fora.
@@ -72,7 +73,8 @@ export class PosFx {
     this.composer.addPass(new ShaderPass(Acabamento));
   }
 
-  excluirDaOclusao(...objetos: THREE.Object3D[]): void {
+  /** Também aceita funções, para listas que mudam (o vidro das janelas). */
+  excluirDaOclusao(...objetos: (THREE.Object3D | (() => THREE.Object3D[]))[]): void {
     this.semOclusao.push(...objetos);
   }
 
