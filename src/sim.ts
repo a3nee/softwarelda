@@ -295,9 +295,72 @@ export interface Produto {
   lancadoEm: number; // minuto de jogo
 }
 
+/** Para a interface escolher cor, som e se mostra um aviso flutuante. */
+export type TipoMensagem = 'info' | 'aviso' | 'lancamento' | 'desbloqueio' | 'conquista' | 'evento' | 'mes' | 'falencia';
+
 export interface Mensagem {
   minuto: number;
   texto: string;
+  tipo?: TipoMensagem; // os saves da versão 1 não o têm
+}
+
+// ---------------------------------------------------------------------------
+// Decoração: cada objeto ocupa uma célula e alegra quem trabalha no mesmo espaço
+// ---------------------------------------------------------------------------
+
+export type TipoObjeto = 'planta' | 'sofa' | 'cafe' | 'matraquilhos';
+
+export interface DefObjeto {
+  nome: string;
+  custo: number;
+  felicidade: number; // pontos a mais no alvo de felicidade (o 2.º do mesmo tipo vale metade, o 3.º um quarto…)
+  descricao: string;
+}
+
+export const OBJETOS: Record<TipoObjeto, DefObjeto> = {
+  planta: { nome: 'Planta', custo: 150, felicidade: 3, descricao: 'Um pouco de verde. Barata, mas vale pouco sozinha.' },
+  sofa: { nome: 'Sofá', custo: 600, felicidade: 5, descricao: 'Para descansar entre duas tarefas.' },
+  cafe: { nome: 'Máquina de café', custo: 900, felicidade: 8, descricao: 'O combustível de qualquer programador.' },
+  matraquilhos: { nome: 'Matraquilhos', custo: 1500, felicidade: 10, descricao: 'Para as pausas mais renhidas.' },
+};
+export const LISTA_OBJETOS = Object.keys(OBJETOS) as TipoObjeto[];
+
+export const DECORACAO = {
+  bonusMaximo: 25, // o alvo de felicidade passa de 75 para, no máximo, 100
+  raioEspacoAberto: 5, // fora das salas, conta a decoração até esta distância (em células)
+};
+
+export interface Objeto {
+  id: number;
+  tipo: TipoObjeto;
+  x: number;
+  z: number;
+}
+
+// ---------------------------------------------------------------------------
+// Empresa e dificuldade
+// ---------------------------------------------------------------------------
+
+export type Dificuldade = 'facil' | 'normal' | 'dificil';
+
+export const DIFICULDADES: Record<Dificuldade, { nome: string; dinheiro: number; descricao: string }> = {
+  facil: { nome: 'Fácil', dinheiro: 50000, descricao: 'Começas com 50 000 €. Ideal para aprender.' },
+  normal: { nome: 'Normal', dinheiro: 25000, descricao: 'Começas com 25 000 €. O jogo equilibrado.' },
+  dificil: { nome: 'Difícil', dinheiro: 12000, descricao: 'Começas com 12 000 €. Cada euro conta.' },
+};
+
+export interface OpcoesJogo {
+  nome?: string;
+  dificuldade?: Dificuldade;
+  eventos?: boolean; // eventos aleatórios no fecho do mês
+}
+
+/** Um fecho de mês, para os gráficos das estatísticas. */
+export interface RegistoMes {
+  mes: number; // mês que fechou (0 = o primeiro)
+  receitas: number;
+  despesas: number;
+  dinheiro: number; // em caixa depois do fecho
 }
 
 export interface Estado {
@@ -318,6 +381,12 @@ export interface Estado {
   semente: number; // estado do gerador aleatório (determinístico)
   proximoId: number;
   versaoMapa: number; // muda sempre que algo construído muda
+  nome: string; // nome da empresa
+  dificuldade: Dificuldade;
+  eventos: boolean;
+  objetos: Objeto[]; // decoração
+  historico: RegistoMes[];
+  conquistas: string[]; // ids de CONQUISTAS já desbloqueadas
 }
 
 // ---------------------------------------------------------------------------
@@ -349,13 +418,15 @@ function escolher<T>(s: Estado, lista: T[]): T {
 // Criação
 // ---------------------------------------------------------------------------
 
-export function novoJogo(semente = 12345, largura = 24, altura = 18): Estado {
+export function novoJogo(semente = 12345, largura = 24, altura = 18, opcoes: OpcoesJogo = {}): Estado {
+  const dificuldade = opcoes.dificuldade ?? 'normal';
+  const nome = opcoes.nome?.trim().slice(0, 30) || 'Software Lda.';
   const s: Estado = {
     largura,
     altura,
     entrada: { x: 0, z: Math.floor(altura / 2) },
     minuto: HORA_INICIO * 60 - 90,
-    dinheiro: ECON.dinheiroInicial,
+    dinheiro: dificuldade === 'normal' ? ECON.dinheiroInicial : DIFICULDADES[dificuldade].dinheiro,
     funcionarios: [],
     candidatos: [],
     secretarias: [],
@@ -368,35 +439,39 @@ export function novoJogo(semente = 12345, largura = 24, altura = 18): Estado {
     semente,
     proximoId: 1,
     versaoMapa: 0,
+    nome,
+    dificuldade,
+    eventos: opcoes.eventos ?? false,
+    objetos: [],
+    historico: [],
+    conquistas: [],
   };
   gerarCandidatos(s);
-  mensagem(s, 'Bem-vindo à Software Lda.! Coloca secretárias e contrata a tua equipa.');
+  mensagem(s, `Bem-vindo à ${nome}! Coloca secretárias e contrata a tua equipa.`);
   return s;
 }
 
-export function mensagem(s: Estado, texto: string): void {
-  s.mensagens.push({ minuto: s.minuto, texto });
+export function mensagem(s: Estado, texto: string, tipo: TipoMensagem = 'info'): void {
+  s.mensagens.push({ minuto: s.minuto, texto, tipo });
   if (s.mensagens.length > 60) s.mensagens.shift();
 }
 
 export function gerarCandidatos(s: Estado): void {
   s.candidatos = [];
-  for (let i = 0; i < 3; i++) {
-    // Uma especialidade forte; as outras áreas mais fracas.
-    const especialidade = escolher(s, AREAS);
-    const competencias = {} as Competencias;
-    for (const a of AREAS) {
-      const v = a === especialidade ? 0.45 + aleatorio(s) * 0.5 : 0.2 + aleatorio(s) * 0.3;
-      competencias[a] = Math.round(v * 100) / 100;
-    }
-    const salario = Math.round(
-      (ECON.salarioBase + competenciaMedia(competencias) * ECON.salarioPorCompetencia) / 50) * 50;
-    s.candidatos.push({
-      nome: `${escolher(s, NOMES)} ${escolher(s, APELIDOS)}`,
-      competencias,
-      salario,
-    });
+  for (let i = 0; i < 3; i++) s.candidatos.push(novoCandidato(s));
+}
+
+function novoCandidato(s: Estado): Candidato {
+  // Uma especialidade forte; as outras áreas mais fracas.
+  const especialidade = escolher(s, AREAS);
+  const competencias = {} as Competencias;
+  for (const a of AREAS) {
+    const v = a === especialidade ? 0.45 + aleatorio(s) * 0.5 : 0.2 + aleatorio(s) * 0.3;
+    competencias[a] = Math.round(v * 100) / 100;
   }
+  const salario = Math.round(
+    (ECON.salarioBase + competenciaMedia(competencias) * ECON.salarioPorCompetencia) / 50) * 50;
+  return { nome: `${escolher(s, NOMES)} ${escolher(s, APELIDOS)}`, competencias, salario };
 }
 
 // ---------------------------------------------------------------------------
@@ -447,6 +522,7 @@ export function colocarSecretaria(s: Estado, x: number, z: number): Resultado {
   if (x === s.entrada.x && z === s.entrada.z)
     return { ok: false, msg: 'Não podes bloquear a entrada.' };
   if (secretariaEm(s, x, z)) return { ok: false, msg: 'Já há uma secretária aqui.' };
+  if (objetoEm(s, x, z)) return { ok: false, msg: 'Já há um objeto aqui.' };
   if (s.dinheiro < ECON.custoSecretaria) return { ok: false, msg: 'Dinheiro insuficiente.' };
   s.dinheiro -= ECON.custoSecretaria;
   s.secretarias.push({ id: s.proximoId++, x, z });
@@ -468,6 +544,58 @@ export function removerSecretaria(s: Estado, x: number, z: number): Resultado {
   s.versaoMapa++;
   atribuirSecretarias(s);
   return { ok: true };
+}
+
+export function objetoEm(s: Estado, x: number, z: number): Objeto | undefined {
+  return s.objetos.find((o) => o.x === x && o.z === z);
+}
+
+export function colocarObjeto(s: Estado, tipo: TipoObjeto, x: number, z: number): Resultado {
+  const def = OBJETOS[tipo];
+  if (!def) return { ok: false };
+  if (!dentroDaGrelha(s, x, z)) return { ok: false, msg: 'Fora do terreno.' };
+  if (x === s.entrada.x && z === s.entrada.z) return { ok: false, msg: 'Não podes bloquear a entrada.' };
+  if (secretariaEm(s, x, z) || objetoEm(s, x, z)) return { ok: false, msg: 'Esta célula já está ocupada.' };
+  if (s.dinheiro < def.custo) return { ok: false, msg: 'Dinheiro insuficiente.' };
+  s.dinheiro -= def.custo;
+  s.objetos.push({ id: s.proximoId++, tipo, x, z });
+  s.versaoMapa++;
+  verificarConquistas(s);
+  return { ok: true };
+}
+
+export function removerObjeto(s: Estado, x: number, z: number): Resultado {
+  const o = objetoEm(s, x, z);
+  if (!o) return { ok: false };
+  s.objetos = s.objetos.filter((d) => d !== o);
+  s.versaoMapa++;
+  return { ok: true };
+}
+
+/**
+ * Pontos de felicidade a mais para quem trabalha na célula (x, z). Numa sala conta a decoração dessa
+ * sala; no espaço aberto, a do espaço aberto que esteja perto. Objetos repetidos valem cada vez menos.
+ */
+export function bonusDecoracao(s: Estado, x: number, z: number, salas: Salas = detetarSalas(s)): number {
+  const aqui = salas.sala[z * s.largura + x];
+  const porTipo = new Map<TipoObjeto, number>();
+  for (const o of s.objetos) {
+    const ali = salas.sala[o.z * s.largura + o.x];
+    const conta = aqui >= 0
+      ? ali === aqui
+      : ali < 0 && Math.abs(o.x - x) + Math.abs(o.z - z) <= DECORACAO.raioEspacoAberto;
+    if (conta) porTipo.set(o.tipo, (porTipo.get(o.tipo) ?? 0) + 1);
+  }
+  let bonus = 0;
+  for (const [t, n] of porTipo) bonus += OBJETOS[t].felicidade * (2 - 2 ** (1 - n)); // 1 + ½ + ¼ + …
+  return Math.min(DECORACAO.bonusMaximo, bonus);
+}
+
+/** Felicidade para a qual o funcionário tende, dia a dia. */
+export function alvoFelicidade(s: Estado, f: Funcionario, salas?: Salas): number {
+  const d = f.secretariaId === null ? undefined : s.secretarias.find((o) => o.id === f.secretariaId);
+  if (!d) return 40;
+  return 75 + (s.objetos.length ? bonusDecoracao(s, d.x, d.z, salas) : 0);
 }
 
 function atribuirSecretarias(s: Estado): void {
@@ -550,6 +678,7 @@ export function colocarParedes(s: Estado, arestas: Aresta[]): Resultado {
   s.dinheiro -= custo;
   for (const a of novas) escreverAresta(s, a, eArestaDaEntrada(s, a) ? PORTA : PAREDE);
   s.versaoMapa++;
+  verificarConquistas(s);
   return { ok: true };
 }
 
@@ -670,6 +799,7 @@ export function contratar(s: Estado, indice: number): Resultado {
   s.candidatos.splice(indice, 1);
   atribuirSecretarias(s);
   mensagem(s, `Contrataste ${f.nome} (${euros(f.salario)}/mês).`);
+  verificarConquistas(s);
   return { ok: true };
 }
 
@@ -880,8 +1010,10 @@ function lancarProjeto(s: Estado, p: Projeto): void {
   const perda = Math.round((1 - mercado) * 100);
   const novos = LISTA_TIPOS.filter((t) => TIPOS[t].produtosNecessarios === s.produtos.length);
   mensagem(s, `«${produto.nome}» foi lançado! Qualidade ${Math.round(qualidade * 100)}%. A equipa está livre.`
-    + (perda >= 5 ? ` O mercado de ${TIPOS[p.tipo].plural.toLowerCase()} está saturado: vendas −${perda}%.` : ''));
-  for (const t of novos) mensagem(s, `Novo tipo de software disponível: ${TIPOS[t].nome.toLowerCase()}.`);
+    + (perda >= 5 ? ` O mercado de ${TIPOS[p.tipo].plural.toLowerCase()} está saturado: vendas −${perda}%.` : ''),
+  'lancamento');
+  for (const t of novos) mensagem(s, `Novo tipo de software disponível: ${TIPOS[t].nome.toLowerCase()}.`, 'desbloqueio');
+  verificarConquistas(s);
 }
 
 // ---------------------------------------------------------------------------
@@ -908,6 +1040,7 @@ export function calcularCaminho(s: Estado, de: Celula, para: Celula): Celula[] |
   const bloqueada = new Uint8Array(W * H);
   for (const d of s.secretarias) bloqueada[d.z * W + d.x] = 1;
   bloqueada[fim] = 0;
+  for (const o of s.objetos) bloqueada[o.z * W + o.x] = 1; // a decoração nunca é destino
 
   const g = new Float64Array(W * H).fill(Infinity);
   const veio = new Int32Array(W * H).fill(-1);
@@ -1043,7 +1176,8 @@ function andar(f: Funcionario): boolean {
 // Guardar e carregar (o Estado é JSON puro; o aleatório vive em s.semente)
 // ---------------------------------------------------------------------------
 
-export const VERSAO_SAVE = 1;
+// Versão 2: nome da empresa, dificuldade, eventos, decoração, histórico e conquistas.
+export const VERSAO_SAVE = 2;
 
 export interface Save {
   versao: number;
@@ -1068,9 +1202,20 @@ export function importarJogo(texto: string): ResultadoCarregar {
   }
   if (!objeto(o) || typeof o.versao !== 'number') return { ok: false, msg: 'Isto não é um jogo guardado.' };
   if (o.versao > VERSAO_SAVE) return { ok: false, msg: 'Este jogo foi guardado numa versão mais recente.' };
+  if (o.versao < 2 && objeto(o.estado)) migrarDaVersao1(o.estado);
   const erro = erroNoEstado(o.estado);
   if (erro) return { ok: false, msg: `Jogo guardado inválido: ${erro}.` };
   return { ok: true, estado: o.estado as Estado, guardadoEm: typeof o.guardadoEm === 'number' ? o.guardadoEm : 0 };
+}
+
+/** Os campos que a versão 2 acrescentou, com os valores de um jogo antigo. */
+function migrarDaVersao1(e: Record<string, unknown>): void {
+  e.nome ??= 'Software Lda.';
+  e.dificuldade ??= 'normal';
+  e.eventos ??= false;
+  e.objetos ??= [];
+  e.historico ??= [];
+  e.conquistas ??= [];
 }
 
 /** Mês de jogo em que estamos (0 = o primeiro); muda no fecho de cada mês. */
@@ -1150,7 +1295,28 @@ function erroNoEstado(e: unknown): string | null {
       || !Array.isArray(p.funcionalidades) || !numero(p.qualidade) || !numero(p.vendasMes)
       || !numero(p.receitaTotal) || !numero(p.lancadoEm)) return 'produto';
   for (const m of e.mensagens as unknown[])
-    if (!objeto(m) || !numero(m.minuto) || typeof m.texto !== 'string') return 'mensagem';
+    if (!objeto(m) || !numero(m.minuto) || typeof m.texto !== 'string'
+      || (m.tipo !== undefined && typeof m.tipo !== 'string')) return 'mensagem';
+
+  if (typeof e.nome !== 'string' || e.nome.length > 40) return 'nome da empresa';
+  if (typeof e.dificuldade !== 'string' || !(e.dificuldade in DIFICULDADES)) return 'dificuldade';
+  if (typeof e.eventos !== 'boolean') return 'campo «eventos» em falta';
+  for (const k of ['objetos', 'historico', 'conquistas'])
+    if (!Array.isArray(e[k])) return `lista «${k}» em falta`;
+  const ocupadas = new Set((e.secretarias as { x: number; z: number }[]).map((d) => d.z * L + d.x));
+  const ids = new Set([...secretarias, ...projetos, ...funcionarios]);
+  for (const o of e.objetos as unknown[]) {
+    if (!objeto(o) || !idValido(o.id) || !celulaValida(o, L, A) || !inteiro(o.x) || !inteiro(o.z)) return 'objeto';
+    if (typeof o.tipo !== 'string' || !(o.tipo in OBJETOS)) return 'objeto desconhecido';
+    if (ids.has(o.id as number)) return 'objeto repetido';
+    ids.add(o.id as number);
+    const c = (o.z as number) * L + (o.x as number);
+    if (ocupadas.has(c)) return 'dois objetos na mesma célula';
+    ocupadas.add(c);
+  }
+  for (const r of e.historico as unknown[])
+    if (!objeto(r) || !numero(r.mes) || !numero(r.receitas) || !numero(r.despesas) || !numero(r.dinheiro)) return 'histórico';
+  if (!(e.conquistas as unknown[]).every((c) => typeof c === 'string')) return 'conquistas';
   return null;
 }
 
@@ -1205,6 +1371,7 @@ function minutoSeguinte(s: Estado): void {
 }
 
 function fimDoDia(s: Estado): void {
+  const salas = s.objetos.length ? detetarSalas(s) : undefined;
   for (const f of s.funcionarios) {
     // Quem ficou preso acaba por ir para casa (e não fica contente).
     if (f.dentro) {
@@ -1213,9 +1380,10 @@ function fimDoDia(s: Estado): void {
       f.caminho = [];
       f.estado = f.secretariaId === null ? 'semSecretaria' : 'emCasa';
     }
-    const alvo = f.secretariaId === null ? 40 : 75;
+    const alvo = alvoFelicidade(s, f, salas);
     f.felicidade += Math.sign(alvo - f.felicidade) * Math.min(2, Math.abs(alvo - f.felicidade));
   }
+  verificarConquistas(s);
 }
 
 function fimDoMes(s: Estado): void {
@@ -1228,10 +1396,177 @@ function fimDoMes(s: Estado): void {
   const salarios = s.funcionarios.reduce((t, f) => t + f.salario, 0);
   const despesas = salarios + ECON.rendaMensal;
   s.dinheiro += receitas - despesas;
-  mensagem(s, `Fecho do mês: receitas ${euros(receitas)}, despesas ${euros(despesas)}.`);
+  mensagem(s, `Fecho do mês: receitas ${euros(receitas)}, despesas ${euros(despesas)}.`, 'mes');
+  s.historico.push({ mes: mesDeJogo(s) - 1, receitas, despesas, dinheiro: s.dinheiro });
+  if (s.historico.length > 240) s.historico.shift();
   gerarCandidatos(s);
   if (s.dinheiro < ECON.limiteFalencia) {
     s.falencia = true;
-    mensagem(s, 'Falência! A empresa ficou sem dinheiro.');
+    mensagem(s, 'Falência! A empresa ficou sem dinheiro.', 'falencia');
+    return;
   }
+  if (s.eventos && aleatorio(s) < PROBABILIDADE_EVENTO) eventoAleatorio(s);
+  verificarConquistas(s);
+}
+
+// ---------------------------------------------------------------------------
+// Eventos aleatórios no fecho do mês (só com s.eventos; os testes de equilíbrio correm sem eles)
+// ---------------------------------------------------------------------------
+
+export const PROBABILIDADE_EVENTO = 0.35;
+
+interface DefEvento {
+  bom: boolean;
+  possivel: (s: Estado) => boolean;
+  aplicar: (s: Estado) => string; // devolve a mensagem
+}
+
+const comVendas = (s: Estado) => s.produtos.filter((p) => p.vendasMes >= 300);
+function mudarFelicidade(s: Estado, d: number): void {
+  for (const f of s.funcionarios) f.felicidade = Math.max(0, Math.min(100, f.felicidade + d));
+}
+
+export const EVENTOS: Record<string, DefEvento> = {
+  revista: {
+    bom: true,
+    possivel: (s) => comVendas(s).length > 0,
+    aplicar: (s) => {
+      const p = escolher(s, comVendas(s));
+      p.vendasMes *= 1.5;
+      return `📰 Uma revista de tecnologia elogiou «${p.nome}»: as vendas sobem 50%.`;
+    },
+  },
+  investidor: {
+    bom: true,
+    possivel: (s) => s.dinheiro < 15000,
+    aplicar: (s) => {
+      s.dinheiro += 6000;
+      return `💼 Um investidor-anjo acredita na ${s.nome}: recebes ${euros(6000)}.`;
+    },
+  },
+  premio: {
+    bom: true,
+    possivel: (s) => s.produtos.length >= 2,
+    aplicar: (s) => {
+      const v = Math.min(6000, 1500 + 500 * s.produtos.length);
+      s.dinheiro += v;
+      return `🏅 A ${s.nome} ganhou o prémio de startup do ano: ${euros(v)}.`;
+    },
+  },
+  feira: {
+    bom: true,
+    possivel: (s) => s.candidatos.length < 5,
+    aplicar: (s) => {
+      s.candidatos.push(novoCandidato(s), novoCandidato(s));
+      return '🎓 Feira de emprego: há dois candidatos novos à tua espera.';
+    },
+  },
+  jantar: {
+    bom: true,
+    possivel: (s) => s.funcionarios.length >= 2,
+    aplicar: (s) => {
+      mudarFelicidade(s, 10);
+      return '🎉 O jantar de equipa correu lindamente: felicidade +10 para todos.';
+    },
+  },
+  avaria: {
+    bom: false,
+    possivel: (s) => s.secretarias.length >= 2,
+    aplicar: (s) => {
+      const v = Math.min(3000, 600 + 150 * s.secretarias.length);
+      s.dinheiro -= v;
+      return `🔥 Avaria nos servidores: a reparação custou ${euros(v)}.`;
+    },
+  },
+  gripe: {
+    bom: false,
+    possivel: (s) => s.funcionarios.length >= 1,
+    aplicar: (s) => {
+      mudarFelicidade(s, -8);
+      return '🤧 Uma gripe passou pelo escritório: felicidade −8 para todos.';
+    },
+  },
+  pirataria: {
+    bom: false,
+    possivel: (s) => comVendas(s).length > 0,
+    aplicar: (s) => {
+      const p = escolher(s, comVendas(s));
+      p.vendasMes *= 0.7;
+      return `🏴 «${p.nome}» foi pirateado: as vendas descem 30%.`;
+    },
+  },
+  financas: {
+    bom: false,
+    possivel: (s) => s.dinheiro > 30000,
+    aplicar: (s) => {
+      const v = Math.min(6000, Math.round((s.dinheiro * 0.06) / 50) * 50);
+      s.dinheiro -= v;
+      return `🧾 Inspeção das Finanças: pagaste ${euros(v)} de acertos.`;
+    },
+  },
+};
+
+function eventoAleatorio(s: Estado): void {
+  const ids = Object.keys(EVENTOS).filter((id) => EVENTOS[id].possivel(s));
+  if (ids.length === 0) return;
+  const e = EVENTOS[escolher(s, ids)];
+  mensagem(s, e.aplicar(s), e.bom ? 'evento' : 'aviso');
+}
+
+// ---------------------------------------------------------------------------
+// Conquistas
+// ---------------------------------------------------------------------------
+
+export interface Conquista {
+  id: string;
+  icone: string;
+  nome: string;
+  descricao: string;
+  cumprida: (s: Estado) => boolean;
+}
+
+const lancou = (s: Estado, t: TipoSoftware) => s.produtos.some((p) => p.tipo === t);
+
+export const CONQUISTAS: Conquista[] = [
+  { id: 'contratar', icone: '🤝', nome: 'Primeira contratação', descricao: 'Contrata o teu primeiro funcionário.',
+    cumprida: (s) => s.funcionarios.length >= 1 },
+  { id: 'produto', icone: '🚀', nome: 'Olá, mundo!', descricao: 'Lança o primeiro produto.',
+    cumprida: (s) => s.produtos.length >= 1 },
+  { id: 'equipa5', icone: '👥', nome: 'Startup a sério', descricao: 'Tem 5 funcionários ao mesmo tempo.',
+    cumprida: (s) => s.funcionarios.length >= 5 },
+  { id: 'equipa10', icone: '🏢', nome: 'Pequena empresa', descricao: 'Tem 10 funcionários ao mesmo tempo.',
+    cumprida: (s) => s.funcionarios.length >= 10 },
+  { id: 'salas3', icone: '📐', nome: 'Arquiteto', descricao: 'Constrói 3 salas fechadas.',
+    cumprida: (s) => detetarSalas(s).total >= 3 },
+  { id: 'decorador', icone: '🪴', nome: 'Decorador', descricao: 'Coloca 5 objetos de decoração.',
+    cumprida: (s) => s.objetos.length >= 5 },
+  { id: 'feliz', icone: '😄', nome: 'Bom ambiente', descricao: 'Tem pelo menos 3 funcionários, todos com felicidade 85 ou mais.',
+    cumprida: (s) => s.funcionarios.length >= 3 && s.funcionarios.every((f) => f.felicidade >= 85) },
+  { id: 'qualidade90', icone: '💎', nome: 'Obra-prima', descricao: 'Lança um produto com qualidade de 90% ou mais.',
+    cumprida: (s) => s.produtos.some((p) => p.qualidade >= 0.9) },
+  { id: 'jogo', icone: '🎮', nome: 'Estúdio de jogos', descricao: 'Lança um jogo.',
+    cumprida: (s) => lancou(s, 'jogo') },
+  { id: 'todos', icone: '🧰', nome: 'Faz-tudo', descricao: 'Lança um produto de cada tipo.',
+    cumprida: (s) => LISTA_TIPOS.every((t) => lancou(s, t)) },
+  { id: 'mes20k', icone: '💰', nome: 'Mês de ouro', descricao: 'Fatura 20 000 € num só mês.',
+    cumprida: (s) => s.historico.some((r) => r.receitas >= 20000) },
+  { id: 'cemmil', icone: '🏦', nome: 'Seis dígitos', descricao: 'Junta 100 000 € em caixa.',
+    cumprida: (s) => s.dinheiro >= 100000 },
+  { id: 'milionario', icone: '👑', nome: 'Milionário', descricao: 'Junta 1 000 000 € em caixa.',
+    cumprida: (s) => s.dinheiro >= 1000000 },
+  { id: 'ano1', icone: '🎂', nome: 'Sobrevivente', descricao: 'Chega ao fim do primeiro ano.',
+    cumprida: (s) => mesDeJogo(s) >= 12 },
+  { id: 'ano5', icone: '🏆', nome: 'Veterano', descricao: 'Chega ao fim do quinto ano.',
+    cumprida: (s) => mesDeJogo(s) >= 60 },
+];
+
+/** Desbloqueia as conquistas cumpridas (com uma mensagem cada) e devolve as novas. */
+export function verificarConquistas(s: Estado): Conquista[] {
+  if (s.falencia) return [];
+  const novas = CONQUISTAS.filter((c) => !s.conquistas.includes(c.id) && c.cumprida(s));
+  for (const c of novas) {
+    s.conquistas.push(c.id);
+    mensagem(s, `${c.icone} Conquista desbloqueada: ${c.nome}!`, 'conquista');
+  }
+  return novas;
 }

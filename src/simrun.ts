@@ -6,6 +6,8 @@ import {
   vendasIniciais, AREAS, totalDaArea, areaDeTrabalho, estimarProjeto,
   cancelarProjeto, definirEquipa, despedir, eficienciaEquipa, membrosDe, semProjeto,
   exportarJogo, importarJogo, mesDeJogo, MIN_POR_MES, VERSAO_SAVE,
+  bonusDecoracao, colocarObjeto, CONQUISTAS, DECORACAO, DIFICULDADES, EVENTOS, OBJETOS, objetoEm,
+  removerObjeto, verificarConquistas,
   type Estado, type TipoSoftware, type Trabalhador,
 } from './sim.ts';
 
@@ -298,6 +300,87 @@ verificar(cenarioSala(false) === 'semAcesso', 'sem porta fica sem acesso');
   verificar(!estragar((o) => { o.estado.dinheiro = 'muito'; }).ok, 'número que não é número é recusado');
   const msg = estragar((o) => { o.estado.paredesV.pop(); });
   verificar(!msg.ok && msg.msg.includes('paredes'), 'a mensagem diz o que está mal');
+
+  // Saves da versão 1 (antes da decoração, do histórico e das conquistas) continuam a carregar.
+  const v1 = JSON.parse(bom);
+  v1.versao = 1;
+  for (const k of ['nome', 'dificuldade', 'eventos', 'objetos', 'historico', 'conquistas']) delete v1.estado[k];
+  for (const m of v1.estado.mensagens) delete m.tipo;
+  const r1 = importarJogo(JSON.stringify(v1));
+  verificar(r1.ok && r1.estado.nome === 'Software Lda.' && r1.estado.objetos.length === 0 && !r1.estado.eventos,
+    'um save da versão 1 carrega, com os valores por omissão da versão 2');
+  verificar(!estragar((o) => { o.estado.objetos.push({ id: 9999, tipo: 'planta', x: 1, z: 1 }); }).ok, 'objeto com id inválido é recusado');
+  verificar(!estragar((o) => { o.estado.objetos.push({ id: 1, tipo: 'piano', x: 1, z: 1 }); }).ok, 'objeto desconhecido é recusado');
+  verificar(!estragar((o) => { o.estado.dificuldade = 'impossivel'; }).ok, 'dificuldade desconhecida é recusada');
+}
+
+// ---------------------------------------------------------------------------
+// Empresa, decoração, histórico, conquistas e eventos
+// ---------------------------------------------------------------------------
+
+{
+  const f = novoJogo(3, 24, 18, { nome: '  Bits & Bolos  ', dificuldade: 'facil', eventos: true });
+  verificar(f.nome === 'Bits & Bolos' && f.dinheiro === DIFICULDADES.facil.dinheiro && f.eventos, 'opções do jogo novo');
+  verificar(novoJogo(3, 24, 18, { dificuldade: 'dificil' }).dinheiro === DIFICULDADES.dificil.dinheiro, 'dificuldade difícil');
+  verificar(novoJogo(3).nome === 'Software Lda.' && !novoJogo(3).eventos, 'por omissão: Software Lda., sem eventos');
+}
+
+{
+  const s = novoJogo(4);
+  s.dinheiro = 1e6;
+  caixa(s, 2, 2, 8, 8); // sala de 6×6 (células 2..7)
+  colocarPorta(s, { tipo: 'v', x: 2, z: 4 });
+  colocarSecretaria(s, 4, 4);
+  verificar(bonusDecoracao(s, 4, 4) === 0, 'sem decoração não há bónus');
+  verificar(colocarObjeto(s, 'planta', 6, 6).ok, 'coloca uma planta');
+  verificar(!colocarObjeto(s, 'sofa', 6, 6).ok, 'não coloca dois objetos na mesma célula');
+  verificar(!colocarObjeto(s, 'sofa', 4, 4).ok && !colocarSecretaria(s, 6, 6).ok, 'objetos e secretárias não se sobrepõem');
+  verificar(!colocarObjeto(s, 'sofa', s.entrada.x, s.entrada.z).ok, 'não bloqueia a entrada');
+  verificar(bonusDecoracao(s, 4, 4) === OBJETOS.planta.felicidade, 'uma planta na sala dá o seu bónus');
+  colocarObjeto(s, 'planta', 6, 5);
+  verificar(bonusDecoracao(s, 4, 4) === OBJETOS.planta.felicidade * 1.5, 'a segunda planta vale metade');
+  colocarObjeto(s, 'cafe', 12, 12); // fora da sala
+  verificar(bonusDecoracao(s, 4, 4) === OBJETOS.planta.felicidade * 1.5, 'decoração de fora da sala não conta');
+  verificar(bonusDecoracao(s, 14, 12) === OBJETOS.cafe.felicidade, 'no espaço aberto conta a decoração perto');
+  verificar(bonusDecoracao(s, 20, 3) === 0, 'no espaço aberto, a decoração longe não conta');
+  for (let i = 0; i < 3; i++) colocarObjeto(s, 'matraquilhos', 3 + i, 7);
+  colocarObjeto(s, 'cafe', 7, 3);
+  colocarObjeto(s, 'sofa', 3, 3);
+  verificar(bonusDecoracao(s, 4, 4) === DECORACAO.bonusMaximo, 'o bónus tem um máximo');
+  verificar(calcularCaminho(s, { x: 12, z: 11 }, { x: 12, z: 13 })!.length > 2, 'os objetos bloqueiam a passagem');
+  const din = s.dinheiro;
+  verificar(removerObjeto(s, 12, 12).ok && s.dinheiro === din && !objetoEm(s, 12, 12), 'demolir um objeto (sem reembolso)');
+
+  // Com decoração, a felicidade sobe acima dos 75 de uma secretária simples.
+  contratar(s, 0);
+  avancar(s, 40 * MIN_POR_DIA);
+  verificar(s.funcionarios[0].felicidade > 90, 'a decoração deixa a equipa mais feliz');
+  verificar(s.conquistas.includes('contratar') && s.conquistas.includes('decorador'), 'conquistas desbloqueadas');
+  verificar(s.mensagens.some((m) => m.tipo === 'conquista'), 'as conquistas avisam com uma mensagem');
+  verificar(s.historico.length === 1 && s.historico[0].mes === 0 && s.historico[0].dinheiro === s.dinheiro,
+    'o fecho do mês fica no histórico');
+  const n = s.conquistas.length;
+  verificarConquistas(s);
+  verificar(s.conquistas.length === n, 'uma conquista só se desbloqueia uma vez');
+  verificar(CONQUISTAS.every((c, i) => CONQUISTAS.findIndex((o) => o.id === c.id) === i), 'ids de conquistas únicos');
+}
+
+{
+  // Eventos: em 3 anos com eventos há bons e maus, e o estado continua válido.
+  const s = novoJogo(8, 24, 18, { eventos: true });
+  s.dinheiro = 40000;
+  for (let i = 0; i < 4; i++) colocarSecretaria(s, 5 + i, 5);
+  contratar(s, 0);
+  contratar(s, 0);
+  for (let i = 0; i < 18; i++) {
+    if (s.projetos.length === 0) iniciarProjeto(s, `P${i}`, 'utilitario');
+    avancar(s, 2 * MIN_POR_MES);
+    s.dinheiro = Math.max(s.dinheiro, 20000); // não deixar ir à falência
+  }
+  const tipos = new Set(s.mensagens.map((m) => m.tipo));
+  verificar(tipos.has('evento') && tipos.has('aviso'), 'há eventos bons e maus');
+  verificar(importarJogo(exportarJogo(s)).ok, 'o estado continua válido depois dos eventos');
+  verificar(Object.keys(EVENTOS).length >= 8, 'há vários eventos');
 }
 
 console.log(`Testes: ${testes} OK`);
