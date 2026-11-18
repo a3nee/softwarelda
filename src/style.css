@@ -1,0 +1,27 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; font-family: system-ui, 'Segoe UI', sans-serif; background: #1d2230; color: #eef; }
+#app canvas { display: block; }
+.ui { position: absolute; pointer-events: none; }
+.ui > * { pointer-events: auto; }
+.painel { background: rgba(20, 24, 36, 0.88); border: 1px solid #39405a; border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+#topo { top: 10px; left: 10px; right: 10px; display: flex; gap: 16px; align-items: center; }
+#topo .dinheiro { font-weight: 700; font-size: 16px; }
+#topo .dinheiro.negativo { color: #ff7a7a; }
+#ferramentas { bottom: 10px; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; }
+#lateral { top: 64px; right: 10px; width: 300px; max-height: calc(100% - 140px); overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+#mensagens { bottom: 64px; left: 10px; width: 380px; max-height: 180px; overflow-y: auto; }
+#mensagens div { padding: 2px 0; color: #cdd; }
+#mensagens .hora { color: #889; margin-right: 6px; }
+#dica { top: 64px; left: 10px; max-width: 380px; color: #cdd; }
+button { background: #2e3550; color: #eef; border: 1px solid #4a5378; border-radius: 6px; padding: 6px 10px; cursor: pointer; font: inherit; }
+button:hover { background: #3b4468; }
+button.ativo { background: #5b6fd6; border-color: #8191f0; }
+button:disabled { opacity: 0.45; cursor: default; }
+h3 { margin: 0 0 6px; font-size: 14px; }
+.linha { display: flex; justify-content: space-between; align-items: center; gap: 6px; padding: 3px 0; }
+.sub { color: #99a; font-size: 12px; }
+.barra { height: 8px; background: #333a52; border-radius: 4px; overflow: hidden; margin: 6px 0; }
+.barra > div { height: 100%; background: #6fd68b; }
+input[type=text] { background: #11141f; color: #eef; border: 1px solid #4a5378; border-radius: 6px; padding: 5px 8px; font: inherit; width: 100%; }
+.aviso { color: #ffb86b; }
+#fim { inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.6); font-size: 28px; }
