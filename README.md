@@ -27,6 +27,10 @@ do Node (≥ 22.18) para correr TypeScript.
 - `src/definicoes.ts` — definições do jogador (`localStorage`, chave `software-lda.definicoes`).
 - `src/som.ts` — efeitos sonoros sintetizados com WebAudio (sem ficheiros de som).
 - `src/grafico.ts` — gráfico das estatísticas (canvas 2D).
+- `src/posfx.ts` — pós-processamento: brilho (bloom), vinheta e saturação (addons do Three.js).
+- `src/particulas.ts` — símbolos a sair de quem trabalha, moedas e estrelas.
+- `src/celebracoes.ts` — janela de lançamento com as críticas, explosão de nível e números a subir.
+- `src/progresso.ts` — painel de missões e janela das melhorias.
 - `src/simrun.ts` — testes da lógica (caminhos, salas, tipos, dependências, mercado, equipas, guardar/carregar,
   decoração, conquistas, eventos), sem 3D.
 - `src/simtest.ts` — equilíbrio da economia: jogadores automáticos durante 2 anos, com 8 sementes, e metas a cumprir.
@@ -48,17 +52,38 @@ do Node (≥ 22.18) para correr TypeScript.
 - **Avisos flutuantes** e sons em lançamentos, conquistas, eventos, desbloqueios e fechos de mês; confetes nos
   lançamentos e conquistas. Erros das ações (dinheiro insuficiente, célula ocupada…) aparecem a vermelho.
 
+## Progressão (viciante de propósito)
+
+- **Experiência e nível** (até 30): lançamentos (mais com qualidade alta e tipos difíceis), conquistas (+100),
+  missões e meses seguidos com lucro (20 XP × série, até 5). O emblema ao lado do nome mostra o nível, o anel de XP
+  e os pontos por gastar; a série aparece como 🔥.
+- **Melhorias** (tecla **M**): um ponto por nível. Marketing digital (+15% vendas), café de especialidade (+5
+  felicidade), recrutador (+1 candidato), renda negociada (900 €), metodologia ágil (metade da coordenação),
+  testes automáticos (+5 de qualidade), prémios de lançamento, formação contínua (+1 por mês na especialidade),
+  fãs leais (vendas caem 40% mais devagar) e ronda de investimento (+25 000 €). Cada uma pede um nível mínimo.
+- **Missões** (`opcoes.missoes`, ligadas nos jogos novos): três de cada vez, sempre à vista à esquerda. As três
+  primeiras ensinam o jogo (contratar, sala, lançar); depois rodam por qualidade, faturação, tipos, decoração,
+  caixa, felicidade e equipas, com alvos que crescem com o nível. Dão XP e, a partir do nível 4, dinheiro
+  (`RECOMPENSAS` em `sim.ts`). Não usam o gerador aleatório.
+- **Críticas**: cada lançamento recebe notas de 4 revistas (1–10, à volta de qualidade × 10, por hash), mostradas
+  numa janela com as cartas a virar, a média e o veredicto. O jogo para enquanto a janela está aberta.
+- `npm run sim` corre o equilíbrio duas vezes: sem missões (tem de dar o mesmo que antes) e com `--missoes`
+  (as recompensas não podem salvar a expansão rápida). As melhorias não entram: os jogadores automáticos não as compram.
+
 ## Gráficos
 
 Sombras PCF do sol, tone mapping ACES, céu e luzes que mudam com a hora (candeeiros e janelas acendem à noite),
 alcatifas coloridas nas salas, secretárias com monitor que acende na cor da especialidade de quem trabalha
 (azul programação, rosa design, verde testes), bonecos com camisola da cor da especialidade que andam e se
 sentam a escrever, e um losango por cima da cabeça com a felicidade (verde ≥ 70, amarelo ≥ 40, vermelho).
+Na qualidade alta há brilho (bloom) nos ecrãs, losangos, candeeiros, janelas e partículas; na média, só a vinheta e
+a saturação. De quem trabalha sobem símbolos da sua área (`</>`, ◆, ✓); no fecho de um mês com lucro sai um repuxo
+de moedas e o saldo sobe no ecrã.
 
 ## Controlos
 
 - **Botão direito** roda a câmara, **botão do meio** arrasta, **roda** faz zoom; **WASD**/setas movem, **Q/E** rodam.
-- Teclas **1–6** escolhem a ferramenta, **Esc** cancela / abre a pausa, **Espaço** pausa, **Ctrl+S** guarda.
+- Teclas **1–6** escolhem a ferramenta, **Esc** cancela / abre a pausa, **Espaço** pausa, **Ctrl+S** guarda, **M** melhorias.
 - **Parede** (100 € por segmento): arrasta entre dois cantos da grelha. Uma zona fechada por paredes passa a ser
   uma **sala** (o chão ganha cor). A parede exterior da entrada (quadrado verde) recebe sempre uma porta.
 - **Porta** (300 €): clica numa parede existente.
@@ -76,7 +101,7 @@ sentam a escrever, e um losango por cima da cabeça com a felicidade (verde ≥ 
 - **Autosave** no fecho de cada mês (`software-lda.autosave`), exceto depois de uma falência, para não
   apagar o último jogo bom.
 - **Carregar** e o arranque da página usam o mais recente dos dois. Um jogo novo passa logo a ser o mais recente.
-- O save é o `Estado` em JSON com uma versão (`VERSAO_SAVE`, agora 2; os saves da versão 1 são migrados). `importarJogo` em `sim.ts` valida tudo
+- O save é o `Estado` em JSON com uma versão (`VERSAO_SAVE`, agora 3; os saves das versões 1 e 2 são migrados). `importarJogo` em `sim.ts` valida tudo
   (campos, tamanhos das paredes, ids de projetos e secretárias referidos pelos funcionários…) e recusa um save
   corrompido com uma mensagem, em vez de o deixar estragar o jogo. Como o gerador aleatório vive no estado, um jogo
   carregado continua exatamente como o original continuaria (há um teste para isso).
