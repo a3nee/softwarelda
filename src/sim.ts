@@ -24,14 +24,17 @@ export const MESES = [
 
 export const ECON = {
   dinheiroInicial: 30000,
-  rendaMensal: 1000,
+  rendaMensal: 1500,
   custoSecretaria: 500,
   custoParede: 100, // por segmento de uma célula
   custoPorta: 300,
   limiteFalencia: -10000,
-  trabalhoProjeto: 12000, // pontos de trabalho de um utilitário
-  vendasBase: 6000, // € no 1.º mês para qualidade 1
+  salarioBase: 1000, // salário = salarioBase + competência × salarioPorCompetencia
+  salarioPorCompetencia: 2500,
+  trabalhoProjeto: 30000, // pontos de trabalho de um utilitário (~2 meses com 2 pessoas)
+  vendasBase: 8000, // € no 1.º mês para qualidade 1, com o mercado livre
   quedaVendas: 0.8, // vendas do mês seguinte = vendas * quedaVendas
+  saturacao: 0.8, // vendas de um produto novo ÷ (1 + saturacao × ocupação do mercado)
 };
 
 export const VELOCIDADE_ANDAR = 0.2; // células por minuto de jogo
@@ -211,7 +214,7 @@ export function gerarCandidatos(s: Estado): void {
   s.candidatos = [];
   for (let i = 0; i < 3; i++) {
     const competencia = Math.round((0.25 + aleatorio(s) * 0.6) * 100) / 100;
-    const salario = Math.round((1000 + competencia * 2500) / 50) * 50;
+    const salario = Math.round((ECON.salarioBase + competencia * ECON.salarioPorCompetencia) / 50) * 50;
     s.candidatos.push({
       nome: `${escolher(s, NOMES)} ${escolher(s, APELIDOS)}`,
       competencia,
@@ -514,19 +517,35 @@ export function iniciarProjeto(s: Estado, nome: string): Resultado {
   return { ok: true };
 }
 
+/**
+ * Quanto do mercado já está ocupado pelos nossos produtos ainda à venda
+ * (soma das vendas mensais atuais, em unidades de vendasBase).
+ */
+export function ocupacaoMercado(s: Estado): number {
+  return s.produtos.reduce((t, p) => t + p.vendasMes, 0) / ECON.vendasBase;
+}
+
+/** Fator (0–1] das vendas de um produto lançado agora, devido à saturação do mercado. */
+export function fatorMercado(s: Estado): number {
+  return 1 / (1 + ECON.saturacao * ocupacaoMercado(s));
+}
+
 function lancarProjeto(s: Estado): void {
   const p = s.projeto!;
   const qualidade = Math.min(1, (p.somaCompetencia / Math.max(1, p.trabalhoFeito)) * 1.2);
+  const mercado = fatorMercado(s);
   const produto: Produto = {
     nome: p.nome,
     qualidade,
-    vendasMes: ECON.vendasBase * qualidade,
+    vendasMes: ECON.vendasBase * qualidade * mercado,
     receitaTotal: 0,
     lancadoEm: s.minuto,
   };
   s.produtos.push(produto);
   s.projeto = null;
-  mensagem(s, `«${produto.nome}» foi lançado! Qualidade ${Math.round(qualidade * 100)}%.`);
+  const perda = Math.round((1 - mercado) * 100);
+  mensagem(s, `«${produto.nome}» foi lançado! Qualidade ${Math.round(qualidade * 100)}%.`
+    + (perda >= 5 ? ` O mercado de utilitários está saturado: vendas −${perda}%.` : ''));
 }
 
 // ---------------------------------------------------------------------------

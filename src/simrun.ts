@@ -1,7 +1,7 @@
-// Simulação sem 3D: corre em Node com `npm run sim`.
+// Testes da lógica sem 3D: correm em Node com `npm run sim` (seguidos de simtest.ts).
 import {
   avancar, calcularCaminho, colocarParedes, colocarPorta, colocarSecretaria, contratar,
-  detetarSalas, euros, iniciarProjeto, MIN_POR_DIA, MIN_POR_MES, novoJogo, segmento,
+  detetarSalas, ECON, fatorMercado, iniciarProjeto, MIN_POR_DIA, novoJogo, segmento,
   type Estado,
 } from './sim.ts';
 
@@ -97,25 +97,27 @@ verificar(cenarioSala(false) === 'semAcesso', 'sem porta fica sem acesso');
   verificar(!s.funcionarios[0].dentro, 'à meia-noite vai para casa');
 }
 
-console.log(`Testes: ${testes} OK\n`);
+{
+  // Saturação do mercado
+  const s = novoJogo(1);
+  verificar(fatorMercado(s) === 1, 'sem produtos o mercado está livre');
+  s.produtos.push({ nome: 'A', qualidade: 1, vendasMes: ECON.vendasBase, receitaTotal: 0, lancadoEm: 0 });
+  verificar(Math.abs(fatorMercado(s) - 1 / (1 + ECON.saturacao)) < 1e-9, 'um produto a vender bem satura o mercado');
+  s.produtos[0].vendasMes = 0;
+  verificar(fatorMercado(s) === 1, 'produtos que já não vendem não contam');
 
-// ---------------------------------------------------------------------------
-// Economia: 2 anos com 2 funcionários num espaço aberto
-// ---------------------------------------------------------------------------
-
-const s = novoJogo(42);
-colocarSecretaria(s, 5, 5);
-colocarSecretaria(s, 6, 5);
-contratar(s, 0);
-contratar(s, 0);
-
-console.log('Mês | Dinheiro    | Func. | Produtos | Projeto');
-for (let mes = 1; mes <= 24 && !s.falencia; mes++) {
-  if (!s.projeto) iniciarProjeto(s, '');
-  avancar(s, MIN_POR_MES);
-  const prog = s.projeto ? `${Math.round((s.projeto.trabalhoFeito / s.projeto.trabalhoTotal) * 100)}%` : '-';
-  console.log(
-    `${String(mes).padStart(3)} | ${euros(s.dinheiro).padStart(11)} | ${String(s.funcionarios.length).padStart(5)} | ${String(s.produtos.length).padStart(8)} | ${prog}`,
-  );
+  // Um projeto quase acabado é lançado com vendas reduzidas pela saturação
+  s.produtos[0].vendasMes = ECON.vendasBase;
+  iniciarProjeto(s, 'B');
+  s.projeto!.trabalhoFeito = s.projeto!.trabalhoTotal - 0.001;
+  s.projeto!.somaCompetencia = s.projeto!.trabalhoFeito; // competência média 1 → qualidade 100%
+  colocarSecretaria(s, 3, 3);
+  contratar(s, 0);
+  avancar(s, MIN_POR_DIA + 3 * 60);
+  const b = s.produtos[1];
+  verificar(b !== undefined && b.qualidade === 1, 'o projeto é lançado com qualidade 100%');
+  verificar(b !== undefined && Math.abs(b.vendasMes - ECON.vendasBase / (1 + ECON.saturacao)) < 1,
+    'as vendas do novo produto refletem a saturação');
 }
-console.log(s.falencia ? 'Resultado: FALÊNCIA' : `Resultado: ${euros(s.dinheiro)} ao fim de 2 anos`);
+
+console.log(`Testes: ${testes} OK`);

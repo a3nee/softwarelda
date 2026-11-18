@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import {
   arestaMaisProxima, avancar, colocarParedes, colocarPorta, colocarSecretaria, contratar,
-  demolirArestas, despedir, detetarSalas, ECON, euros, iniciarProjeto, lerAresta,
+  demolirArestas, despedir, detetarSalas, ECON, euros, fatorMercado, iniciarProjeto, lerAresta,
   minutoDoDia, NADA, NOME_ESTADO, novoJogo, PORTA, removerSecretaria, secretariaEm, segmento,
   textoData, type Aresta, type Estado, type Funcionario, type Resultado,
 } from './sim.ts';
@@ -520,7 +520,10 @@ function atualizarUI(): void {
       <div>${c.nome}<div class="sub">comp. ${Math.round(c.competencia * 100)} · ${euros(c.salario)}/mês</div></div>
       <button data-acao="contratar" data-i="${i}">Contratar</button></div>`).join('')}`);
 
+  const mercado = Math.round(fatorMercado(s) * 100);
   definir(document.getElementById('p-produtos')!, `<h3>Produtos</h3>
+    <div class="sub ${mercado < 70 ? 'aviso' : ''}" title="Um utilitário novo vende esta percentagem do normal. Os produtos ainda à venda ocupam o mercado.">
+      Mercado de utilitários: um produto novo venderia ${mercado}% do normal</div>
     ${s.produtos.length === 0 ? '<div class="sub">Nenhum produto lançado.</div>' : ''}
     ${s.produtos.slice(-8).reverse().map((p) => `<div class="linha">
       <div>${p.nome}<div class="sub">qualidade ${Math.round(p.qualidade * 100)}% · total ${euros(p.receitaTotal)}</div></div>
