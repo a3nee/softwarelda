@@ -26,6 +26,8 @@ export const ECON = {
   dinheiroInicial: 30000,
   rendaMensal: 1000,
   custoSecretaria: 500,
+  custoParede: 100, // por segmento de uma célula
+  custoPorta: 300,
   limiteFalencia: -10000,
   trabalhoProjeto: 12000, // pontos de trabalho de um utilitário
   vendasBase: 6000, // € no 1.º mês para qualidade 1
@@ -43,7 +45,9 @@ export type EstadoFuncionario =
   | 'aCaminho'
   | 'aTrabalhar'
   | 'aSair'
-  | 'semSecretaria';
+  | 'semSecretaria'
+  | 'semAcesso' // não há caminho até à secretária
+  | 'preso'; // não há caminho até à saída
 
 export const NOME_ESTADO: Record<EstadoFuncionario, string> = {
   emCasa: 'Em casa',
@@ -51,7 +55,25 @@ export const NOME_ESTADO: Record<EstadoFuncionario, string> = {
   aTrabalhar: 'A trabalhar',
   aSair: 'A sair',
   semSecretaria: 'Sem secretária',
+  semAcesso: 'Sem acesso à secretária',
+  preso: 'Preso — sem caminho para a saída',
 };
+
+/** Conteúdo de uma aresta da grelha (a linha entre duas células). */
+export const NADA = 0;
+export const PAREDE = 1;
+export const PORTA = 2;
+
+/**
+ * Aresta da grelha. As arestas vivem nas linhas entre células:
+ * - 'v': linha vertical x (entre as células x-1 e x), na linha de células z. x vai de 0 a largura.
+ * - 'h': linha horizontal z (entre as células z-1 e z), na coluna de células x. z vai de 0 a altura.
+ */
+export interface Aresta {
+  tipo: 'v' | 'h';
+  x: number;
+  z: number;
+}
 
 export interface Celula {
   x: number;
@@ -70,6 +92,7 @@ export interface Funcionario {
   x: number; // posição contínua; o centro da célula (i, j) é (i, j)
   z: number;
   caminho: Celula[]; // próximas células a percorrer
+  versaoCaminho: number; // versaoMapa para a qual o caminho foi calculado
   horaChegada: number; // minuto do dia em que sai de casa
 }
 
@@ -114,6 +137,8 @@ export interface Estado {
   funcionarios: Funcionario[];
   candidatos: Candidato[];
   secretarias: Secretaria[];
+  paredesV: number[]; // (largura + 1) * altura — ver Aresta
+  paredesH: number[]; // largura * (altura + 1)
   projeto: Projeto | null;
   produtos: Produto[];
   mensagens: Mensagem[];
@@ -162,6 +187,8 @@ export function novoJogo(semente = 12345, largura = 24, altura = 18): Estado {
     funcionarios: [],
     candidatos: [],
     secretarias: [],
+    paredesV: new Array((largura + 1) * altura).fill(NADA),
+    paredesH: new Array(largura * (altura + 1)).fill(NADA),
     projeto: null,
     produtos: [],
     mensagens: [],
@@ -280,6 +307,164 @@ function atribuirSecretarias(s: Estado): void {
 }
 
 // ---------------------------------------------------------------------------
+// Paredes e portas
+// ---------------------------------------------------------------------------
+
+export function arestaValida(s: Estado, a: Aresta): boolean {
+  if (!Number.isInteger(a.x) || !Number.isInteger(a.z)) return false;
+  return a.tipo === 'v'
+    ? a.x >= 0 && a.x <= s.largura && a.z >= 0 && a.z < s.altura
+    : a.x >= 0 && a.x < s.largura && a.z >= 0 && a.z <= s.altura;
+}
+
+export function lerAresta(s: Estado, a: Aresta): number {
+  if (!arestaValida(s, a)) return NADA;
+  return a.tipo === 'v' ? s.paredesV[a.z * (s.largura + 1) + a.x] : s.paredesH[a.z * s.largura + a.x];
+}
+
+function escreverAresta(s: Estado, a: Aresta, valor: number): void {
+  if (a.tipo === 'v') s.paredesV[a.z * (s.largura + 1) + a.x] = valor;
+  else s.paredesH[a.z * s.largura + a.x] = valor;
+}
+
+/** A aresta exterior da entrada (no limite do terreno) leva sempre uma porta. */
+function eArestaDaEntrada(s: Estado, a: Aresta): boolean {
+  const e = s.entrada;
+  if (e.x === 0) return a.tipo === 'v' && a.x === 0 && a.z === e.z;
+  if (e.x === s.largura - 1) return a.tipo === 'v' && a.x === s.largura && a.z === e.z;
+  if (e.z === 0) return a.tipo === 'h' && a.z === 0 && a.x === e.x;
+  return a.tipo === 'h' && a.z === s.altura && a.x === e.x;
+}
+
+/**
+ * Arestas de um segmento reto entre dois vértices da grelha (cantos das células,
+ * de (0,0) a (largura, altura)). Usa o eixo dominante, como ao arrastar o rato.
+ */
+export function segmento(x0: number, z0: number, x1: number, z1: number): Aresta[] {
+  const r: Aresta[] = [];
+  if (Math.abs(x1 - x0) >= Math.abs(z1 - z0)) {
+    for (let x = Math.min(x0, x1); x < Math.max(x0, x1); x++) r.push({ tipo: 'h', x, z: z0 });
+  } else {
+    for (let z = Math.min(z0, z1); z < Math.max(z0, z1); z++) r.push({ tipo: 'v', x: x0, z });
+  }
+  return r;
+}
+
+/**
+ * Aresta mais próxima de um ponto em coordenadas da grelha
+ * (onde a célula i ocupa [i, i+1]). Devolve também a distância à linha.
+ */
+export function arestaMaisProxima(gx: number, gz: number): { aresta: Aresta; distancia: number } {
+  const dv = Math.abs(gx - Math.round(gx));
+  const dh = Math.abs(gz - Math.round(gz));
+  return dv < dh
+    ? { aresta: { tipo: 'v', x: Math.round(gx), z: Math.floor(gz) }, distancia: dv }
+    : { aresta: { tipo: 'h', x: Math.floor(gx), z: Math.round(gz) }, distancia: dh };
+}
+
+/** Coloca paredes nas arestas vazias do segmento. Só cobra as novas. */
+export function colocarParedes(s: Estado, arestas: Aresta[]): Resultado {
+  const novas = arestas.filter((a) => arestaValida(s, a) && lerAresta(s, a) === NADA);
+  if (novas.length === 0) return { ok: false };
+  const custo = novas.length * ECON.custoParede;
+  if (s.dinheiro < custo) return { ok: false, msg: `Dinheiro insuficiente (custa ${euros(custo)}).` };
+  s.dinheiro -= custo;
+  for (const a of novas) escreverAresta(s, a, eArestaDaEntrada(s, a) ? PORTA : PAREDE);
+  s.versaoMapa++;
+  return { ok: true };
+}
+
+/** Transforma uma parede existente numa porta. */
+export function colocarPorta(s: Estado, a: Aresta): Resultado {
+  const atual = lerAresta(s, a);
+  if (atual === PORTA) return { ok: false, msg: 'Já há uma porta aqui.' };
+  if (atual !== PAREDE) return { ok: false, msg: 'As portas têm de ser colocadas numa parede.' };
+  if (s.dinheiro < ECON.custoPorta) return { ok: false, msg: 'Dinheiro insuficiente.' };
+  s.dinheiro -= ECON.custoPorta;
+  escreverAresta(s, a, PORTA);
+  s.versaoMapa++;
+  return { ok: true };
+}
+
+/** Remove paredes e portas (sem reembolso). */
+export function demolirArestas(s: Estado, arestas: Aresta[]): Resultado {
+  let n = 0;
+  for (const a of arestas)
+    if (arestaValida(s, a) && lerAresta(s, a) !== NADA) {
+      escreverAresta(s, a, NADA);
+      n++;
+    }
+  if (n === 0) return { ok: false };
+  s.versaoMapa++;
+  return { ok: true };
+}
+
+/** Valor da aresta entre a célula (x, z) e a vizinha (x+dx, z+dz). */
+export function arestaEntre(s: Estado, x: number, z: number, dx: number, dz: number): number {
+  if (dx === 1) return s.paredesV[z * (s.largura + 1) + x + 1];
+  if (dx === -1) return s.paredesV[z * (s.largura + 1) + x];
+  if (dz === 1) return s.paredesH[(z + 1) * s.largura + x];
+  return s.paredesH[z * s.largura + x];
+}
+
+const VIZINHOS: [number, number][] = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+// ---------------------------------------------------------------------------
+// Salas
+// ---------------------------------------------------------------------------
+
+export interface Salas {
+  /** Por célula (z * largura + x): número da sala, ou -1 se for espaço aberto. */
+  sala: number[];
+  total: number;
+}
+
+/**
+ * Uma sala é uma zona de células separada do resto por paredes ou portas e que
+ * não está aberta para o exterior (limite do terreno sem parede).
+ */
+export function detetarSalas(s: Estado): Salas {
+  const W = s.largura;
+  const H = s.altura;
+  const zona = new Array<number>(W * H).fill(-1);
+  const abertas: boolean[] = [];
+  const pilha: number[] = [];
+  for (let inicio = 0; inicio < W * H; inicio++) {
+    if (zona[inicio] !== -1) continue;
+    const id = abertas.length;
+    let aberta = false;
+    zona[inicio] = id;
+    pilha.push(inicio);
+    while (pilha.length) {
+      const c = pilha.pop()!;
+      const x = c % W;
+      const z = (c - x) / W;
+      for (const [dx, dz] of VIZINHOS) {
+        const nx = x + dx;
+        const nz = z + dz;
+        const fechada = arestaEntre(s, x, z, dx, dz) !== NADA;
+        if (nx < 0 || nz < 0 || nx >= W || nz >= H) {
+          if (!fechada) aberta = true;
+          continue;
+        }
+        const n = nz * W + nx;
+        if (fechada || zona[n] !== -1) continue;
+        zona[n] = id;
+        pilha.push(n);
+      }
+    }
+    abertas.push(aberta);
+  }
+  // Renumerar: só as zonas fechadas contam como salas.
+  const numero = abertas.map(() => -1);
+  let total = 0;
+  abertas.forEach((a, i) => {
+    if (!a) numero[i] = total++;
+  });
+  return { sala: zona.map((z) => numero[z]), total };
+}
+
+// ---------------------------------------------------------------------------
 // Pessoal
 // ---------------------------------------------------------------------------
 
@@ -298,6 +483,7 @@ export function contratar(s: Estado, indice: number): Resultado {
     x: s.entrada.x,
     z: s.entrada.z,
     caminho: [],
+    versaoCaminho: -1,
     horaChegada: HORA_CHEGADA * 60 + Math.floor(aleatorio(s) * 40),
   };
   s.funcionarios.push(f);
@@ -351,24 +537,130 @@ function celulaDe(f: Funcionario): Celula {
   return { x: Math.round(f.x), z: Math.round(f.z) };
 }
 
-/** Caminho da posição atual até ao destino (por agora em linha reta). */
-export function calcularCaminho(_s: Estado, _de: Celula, para: Celula): Celula[] | null {
-  return [para];
+/**
+ * A* na grelha (4 direções). Não atravessa paredes (as portas deixam passar) nem
+ * secretárias, exceto a de destino. Devolve as células a percorrer sem a de
+ * partida, ou null se não houver caminho.
+ */
+export function calcularCaminho(s: Estado, de: Celula, para: Celula): Celula[] | null {
+  const W = s.largura;
+  const H = s.altura;
+  if (!dentroDaGrelha(s, de.x, de.z) || !dentroDaGrelha(s, para.x, para.z)) return null;
+  const inicio = de.z * W + de.x;
+  const fim = para.z * W + para.x;
+  if (inicio === fim) return [];
+
+  const bloqueada = new Uint8Array(W * H);
+  for (const d of s.secretarias) bloqueada[d.z * W + d.x] = 1;
+  bloqueada[fim] = 0;
+
+  const g = new Float64Array(W * H).fill(Infinity);
+  const veio = new Int32Array(W * H).fill(-1);
+  const fechada = new Uint8Array(W * H);
+  const h = (c: number) => Math.abs((c % W) - para.x) + Math.abs(Math.floor(c / W) - para.z);
+
+  // Fila de prioridade (heap binário) de [f, célula]
+  const heap: [number, number][] = [];
+  const push = (f: number, c: number) => {
+    heap.push([f, c]);
+    let i = heap.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (heap[p][0] <= heap[i][0]) break;
+      [heap[p], heap[i]] = [heap[i], heap[p]];
+      i = p;
+    }
+  };
+  const pop = (): number => {
+    const topo = heap[0][1];
+    const ult = heap.pop()!;
+    if (heap.length > 0) {
+      heap[0] = ult;
+      let i = 0;
+      for (;;) {
+        const a = 2 * i + 1;
+        const b = a + 1;
+        let m = i;
+        if (a < heap.length && heap[a][0] < heap[m][0]) m = a;
+        if (b < heap.length && heap[b][0] < heap[m][0]) m = b;
+        if (m === i) break;
+        [heap[m], heap[i]] = [heap[i], heap[m]];
+        i = m;
+      }
+    }
+    return topo;
+  };
+
+  g[inicio] = 0;
+  push(h(inicio), inicio);
+  while (heap.length) {
+    const c = pop();
+    if (c === fim) break;
+    if (fechada[c]) continue;
+    fechada[c] = 1;
+    const x = c % W;
+    const z = (c - x) / W;
+    for (const [dx, dz] of VIZINHOS) {
+      const nx = x + dx;
+      const nz = z + dz;
+      if (nx < 0 || nz < 0 || nx >= W || nz >= H) continue;
+      const n = nz * W + nx;
+      if (bloqueada[n] || fechada[n]) continue;
+      if (arestaEntre(s, x, z, dx, dz) === PAREDE) continue;
+      const custo = g[c] + 1;
+      if (custo < g[n]) {
+        g[n] = custo;
+        veio[n] = c;
+        push(custo + h(n), n);
+      }
+    }
+  }
+  if (veio[fim] === -1) return null;
+  const caminho: Celula[] = [];
+  for (let c = fim; c !== inicio; c = veio[c]) caminho.push({ x: c % W, z: Math.floor(c / W) });
+  return caminho.reverse();
+}
+
+function secretariaDe(s: Estado, f: Funcionario): Secretaria | undefined {
+  return s.secretarias.find((o) => o.id === f.secretariaId);
+}
+
+/** (Re)calcula o caminho para o destino do estado atual, a partir da célula onde está. */
+function recalcular(s: Estado, f: Funcionario): void {
+  f.versaoCaminho = s.versaoMapa;
+  const aEntrar = f.estado === 'aCaminho' || f.estado === 'semAcesso';
+  const destino = aEntrar ? secretariaDe(s, f) : s.entrada;
+  if (!destino) return;
+  const c = celulaDe(f);
+  const caminho = calcularCaminho(s, c, destino);
+  // Primeiro volta ao centro da célula atual, para nunca atravessar uma parede nova.
+  if (caminho) {
+    f.caminho = [c, ...caminho];
+    f.estado = aEntrar ? 'aCaminho' : 'aSair';
+  } else {
+    f.caminho = [c];
+    const novo = aEntrar ? 'semAcesso' : 'preso';
+    if (f.estado !== novo)
+      mensagem(s, aEntrar
+        ? `${f.nome} não consegue chegar à secretária. Falta uma porta?`
+        : `${f.nome} está preso(a) e não consegue sair do escritório.`);
+    f.estado = novo;
+  }
 }
 
 function planearChegada(s: Estado, f: Funcionario): void {
-  const d = s.secretarias.find((o) => o.id === f.secretariaId);
-  if (!d) return;
+  if (!secretariaDe(s, f)) return;
   f.dentro = true;
   f.x = s.entrada.x;
   f.z = s.entrada.z;
-  f.caminho = calcularCaminho(s, s.entrada, d) ?? [];
   f.estado = 'aCaminho';
+  recalcular(s, f);
 }
 
 function planearSaida(s: Estado, f: Funcionario): void {
-  f.caminho = calcularCaminho(s, celulaDe(f), s.entrada) ?? [];
+  if (f.estado === 'semAcesso') f.felicidade = Math.max(0, f.felicidade - 5);
   f.estado = 'aSair';
+  recalcular(s, f);
 }
 
 function andar(f: Funcionario): boolean {
@@ -410,7 +702,12 @@ function minutoSeguinte(s: Estado): void {
       if (md === f.horaChegada && f.secretariaId !== null) planearChegada(s, f);
       continue;
     }
-    if (md === HORA_FIM * 60 && f.estado !== 'aSair') planearSaida(s, f);
+    if (md === HORA_FIM * 60 && f.estado !== 'aSair' && f.estado !== 'preso') planearSaida(s, f);
+
+    // O mapa mudou: quem está a andar (ou à espera de caminho) volta a planear.
+    const espera = f.estado === 'semAcesso' || f.estado === 'preso';
+    if ((espera || f.estado === 'aCaminho' || f.estado === 'aSair') && f.versaoCaminho !== s.versaoMapa)
+      recalcular(s, f);
 
     if (f.estado === 'aCaminho' || f.estado === 'aSair') {
       if (andar(f)) {
@@ -436,6 +733,13 @@ function minutoSeguinte(s: Estado): void {
 
 function fimDoDia(s: Estado): void {
   for (const f of s.funcionarios) {
+    // Quem ficou preso acaba por ir para casa (e não fica contente).
+    if (f.dentro) {
+      if (f.estado === 'preso') f.felicidade = Math.max(0, f.felicidade - 10);
+      f.dentro = false;
+      f.caminho = [];
+      f.estado = f.secretariaId === null ? 'semSecretaria' : 'emCasa';
+    }
     const alvo = f.secretariaId === null ? 40 : 75;
     f.felicidade += Math.sign(alvo - f.felicidade) * Math.min(2, Math.abs(alvo - f.felicidade));
   }

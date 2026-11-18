@@ -25,7 +25,22 @@ do Node (≥ 22.18) para correr TypeScript.
 ## Controlos
 
 - **Botão direito** roda a câmara, **botão do meio** arrasta, **roda** faz zoom.
-- Barra de baixo: ferramentas de construção. Painel da direita: projeto, equipa, candidatos, produtos.
+- Teclas **1–5** escolhem a ferramenta, **Esc** volta a Selecionar, **Espaço** pausa.
+- **Parede** (100 € por segmento): arrasta entre dois cantos da grelha. Uma zona fechada por paredes passa a ser
+  uma **sala** (o chão ganha cor). A parede exterior da entrada (quadrado verde) recebe sempre uma porta.
+- **Porta** (300 €): clica numa parede existente.
+- **Secretária** (500 €): clica numa célula.
+- **Demolir**: clica numa parede, porta ou secretária, ou arrasta para demolir um troço de parede. Sem reembolso.
+- Painel da direita: projeto, equipa, candidatos, produtos.
+
+## Movimento dos funcionários
+
+Andam pela grelha com **A\*** (4 direções): as paredes bloqueiam, as portas deixam passar e as secretárias são
+obstáculos (menos a de destino). Quando o mapa muda, quem está a andar recalcula o caminho. Sem caminho, o
+funcionário fica **Sem acesso à secretária** (espera à entrada) ou **Preso** (vai para casa à meia-noite); as duas
+situações baixam a felicidade.
+
+Em `npm run dev` ficam disponíveis na consola `__jogo` (estado) e `__ecra(x, z)` (vértice da grelha → píxeis).
 
 ## Regras do jogo (atuais)
 
