@@ -2,7 +2,8 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import {
-  arestaMaisProxima, avancar, colocarParedes, colocarPorta, colocarSecretaria, comDependencias,
+  AREAS, arestaMaisProxima, avancar, estimarProjeto, NOME_AREA, qualidadeDoProjeto, totalDaArea, type Area,
+  type Competencias, colocarParedes, colocarPorta, colocarSecretaria, comDependencias,
   contratar, demolirArestas, despedir, detetarSalas, ECON, euros, fatorMercado, iniciarProjeto,
   lerAresta, LISTA_TIPOS, minutoDoDia, NADA, NOME_ESTADO, novoJogo, PORTA, removerSecretaria,
   secretariaEm, segmento, semDependentes, textoData, tipoDisponivel, TIPOS, trabalhoDoProjeto,
@@ -490,15 +491,15 @@ lateral.addEventListener('change', (ev) => {
 let tipoEscolhido: TipoSoftware = 'utilitario';
 let funcEscolhidas: string[] = [];
 
-/** Pontos de trabalho que a equipa atual faz por mês (8 h × 30 dias). */
-function capacidadeMensal(): number {
-  return s.funcionarios.reduce((t, f) => t + f.competencia * (0.5 + f.felicidade / 200), 0) * 8 * 60 * 30;
-}
+const SIGLA_AREA: Record<Area, string> = { programacao: 'Prog', design: 'Des', testes: 'Test' };
 
-/** Qualidade que a equipa atual daria a um produto (a mesma fórmula do lançamento). */
-function qualidadeEsperada(): number {
-  const n = s.funcionarios.length;
-  return n ? Math.min(1, (s.funcionarios.reduce((t, f) => t + f.competencia, 0) / n) * 1.2) : 0;
+/** "Prog 70 · Des 30 · Test 25", com a especialidade (a área mais forte) destacada. */
+function textoCompetencias(c: Competencias): string {
+  const forte = AREAS.reduce((m, a) => (c[a] > c[m] ? a : m), AREAS[0]);
+  return AREAS.map((a) => {
+    const v = `${SIGLA_AREA[a]} ${Math.round(c[a] * 100)}`;
+    return a === forte ? `<b>${v}</b>` : v;
+  }).join(' · ');
 }
 
 function esc(texto: string): string {
@@ -537,7 +538,12 @@ function atualizarUI(): void {
     definir(pProjeto, `<h3>Projeto: ${esc(p.nome)}</h3>
       <div class="sub">${TIPOS[p.tipo].nome}${funcs.length ? ` · ${funcs.join(', ')}` : ''}</div>
       <div class="barra"><div style="width:${pct.toFixed(1)}%"></div></div>
-      <div class="sub">${pct.toFixed(0)}% concluído · ${Math.round(p.trabalhoFeito).toLocaleString('pt-PT')} de ${p.trabalhoTotal.toLocaleString('pt-PT')} pontos</div>`);
+      <div class="sub">${pct.toFixed(0)}% concluído · qualidade até agora ${Math.round(qualidadeDoProjeto(p) * 100)}%</div>
+      ${AREAS.filter((a) => totalDaArea(p, a) > 0).map((a) => {
+        const v = Math.min(100, (p.feito[a] / totalDaArea(p, a)) * 100);
+        return `<div class="area"><span class="sub">${NOME_AREA[a]}</span>
+          <div class="barra fina"><div style="width:${v.toFixed(1)}%"></div></div></div>`;
+      }).join('')}`);
   } else {
     // O campo do nome fica fora da parte que é redesenhada, para não perder o foco ao escrever.
     definir(pProjeto, `<h3>Novo projeto</h3>
@@ -546,8 +552,8 @@ function atualizarUI(): void {
     if (!tipoDisponivel(s, tipoEscolhido)) tipoEscolhido = 'utilitario';
     const def = TIPOS[tipoEscolhido];
     const trabalho = trabalhoDoProjeto(tipoEscolhido, funcEscolhidas);
-    const cap = capacidadeMensal();
-    const qualidade = qualidadeEsperada();
+    const previsao = estimarProjeto(s.funcionarios, tipoEscolhido, funcEscolhidas);
+    const qualidade = previsao.qualidade;
     const mercado = fatorMercado(s, tipoEscolhido);
     const vendas = vendasIniciais(tipoEscolhido, funcEscolhidas, qualidade, mercado);
     const tipos = LISTA_TIPOS.map((t) => {
@@ -561,13 +567,15 @@ function atualizarUI(): void {
       return `<label class="func"><input type="checkbox" data-func="${f.id}" ${funcEscolhidas.includes(f.id) ? 'checked' : ''}>
         <span>${f.nome}<div class="sub">+${(f.trabalho / 1000).toFixed(0)}k pontos · +${Math.round(f.valor * 100)}% vendas${req.length ? ` · precisa de ${req.join(', ')}` : ''}</div></span></label>`;
     }).join('');
-    const meses = cap > 0 ? trabalho / cap : Infinity;
+    const meses = previsao.meses;
+    const areas = AREAS.map((a) => `${NOME_AREA[a]} ${Math.round(def.areas[a] * 100)}%`).join(' · ');
     definir(document.getElementById('config-projeto')!, `
       <div class="tipos">${tipos}</div>
       <div class="sub">${def.descricao}</div>
+      <div class="sub">Trabalho por área: ${areas}</div>
       ${funcs ? `<div class="funcs">${funcs}</div>` : ''}
       <div class="sub">Trabalho: ${trabalho.toLocaleString('pt-PT')} pontos
-        (${Number.isFinite(meses) ? `~${meses.toFixed(1).replace('.', ',')} meses com a equipa atual` : 'sem equipa'})</div>
+        (${Number.isFinite(meses) ? `~${meses.toFixed(1).replace('.', ',')} meses com a equipa atual` : s.funcionarios.length ? 'mais de 3 anos' : 'sem equipa'})</div>
       <div class="sub ${mercado < 0.7 ? 'aviso' : ''}">Vendas no 1.º mês: ~${euros(vendas)}
         (qualidade ~${Math.round(qualidade * 100)}%, mercado ${Math.round(mercado * 100)}%)</div>
       <div class="linha"><button data-acao="projeto">Começar desenvolvimento</button></div>`);
@@ -578,13 +586,13 @@ function atualizarUI(): void {
     ${s.funcionarios.length === 0 ? '<div class="sub">Ainda não tens funcionários.</div>' : ''}
     ${s.funcionarios.map((f) => `<div class="linha">
       <div>${f.nome}<div class="sub ${['semSecretaria', 'semAcesso', 'preso'].includes(f.estado) ? 'aviso' : ''}">
-        ${NOME_ESTADO[f.estado]} · comp. ${Math.round(f.competencia * 100)} · 😊 ${Math.round(f.felicidade)}</div></div>
+        ${NOME_ESTADO[f.estado]} · 😊 ${Math.round(f.felicidade)}</div><div class="sub">${textoCompetencias(f.competencias)}</div></div>
       <button data-acao="despedir" data-id="${f.id}">Despedir</button></div>`).join('')}`);
 
   definir(document.getElementById('p-candidatos')!, `<h3>Candidatos</h3>
     ${s.candidatos.length === 0 ? '<div class="sub">Novos candidatos no próximo mês.</div>' : ''}
     ${s.candidatos.map((c, i) => `<div class="linha">
-      <div>${c.nome}<div class="sub">comp. ${Math.round(c.competencia * 100)} · ${euros(c.salario)}/mês</div></div>
+      <div>${c.nome}<div class="sub">${textoCompetencias(c.competencias)}</div><div class="sub">${euros(c.salario)}/mês</div></div>
       <button data-acao="contratar" data-i="${i}">Contratar</button></div>`).join('')}`);
 
   const mercados = LISTA_TIPOS.filter((t) => tipoDisponivel(s, t)).map((t) => {

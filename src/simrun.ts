@@ -3,7 +3,8 @@ import {
   avancar, calcularCaminho, colocarParedes, colocarPorta, colocarSecretaria, contratar,
   comDependencias, detetarSalas, ECON, fatorMercado, iniciarProjeto, LISTA_TIPOS, MIN_POR_DIA,
   novoJogo, segmento, semDependentes, TIPOS, trabalhoDoProjeto, validarFuncionalidades, valorDoProjeto,
-  vendasIniciais, type Estado, type TipoSoftware,
+  vendasIniciais, AREAS, totalDaArea, areaDeTrabalho, estimarProjeto,
+  type Estado, type TipoSoftware, type Trabalhador,
 } from './sim.ts';
 
 // ---------------------------------------------------------------------------
@@ -140,8 +141,13 @@ verificar(cenarioSala(false) === 'semAcesso', 'sem porta fica sem acesso');
   s.produtos[0].vendasMes = TIPOS.utilitario.vendas;
   s.produtos.push(produto('editor', TIPOS.editor.vendas));
   verificar(iniciarProjeto(s, 'B', 'editor', ['corretor']).ok, 'editor desbloqueado com produtos lançados');
-  s.projeto!.trabalhoFeito = s.projeto!.trabalhoTotal - 0.001;
-  s.projeto!.somaCompetencia = s.projeto!.trabalhoFeito; // competência média 1 → qualidade 100%
+  // Quase acabado e feito por gente com competência 1 em todas as áreas → qualidade 100%
+  const pr = s.projeto!;
+  for (const a of AREAS) {
+    pr.feito[a] = totalDaArea(pr, a) - 0.001;
+    pr.somaQualidade[a] = pr.feito[a];
+  }
+  pr.trabalhoFeito = pr.trabalhoTotal;
   colocarSecretaria(s, 3, 3);
   contratar(s, 0);
   avancar(s, MIN_POR_DIA + 3 * 60);
@@ -151,6 +157,47 @@ verificar(cenarioSala(false) === 'semAcesso', 'sem porta fica sem acesso');
     'as vendas do editor refletem as funcionalidades e a saturação');
   verificar(Math.abs(vendasIniciais('jogo', [], 0.5, 1) - TIPOS.jogo.vendas * 0.5 ** 1.5) < 1e-6,
     'os jogos castigam mais a falta de qualidade');
+}
+
+{
+  // Competências por área
+  for (const t of LISTA_TIPOS)
+    verificar(Math.abs(AREAS.reduce((x, a) => x + TIPOS[t].areas[a], 0) - 1) < 1e-9, `${t}: as áreas somam 100%`);
+  const s = novoJogo(3);
+  verificar(s.candidatos.every((c) => AREAS.every((a) => c.competencias[a] > 0 && c.competencias[a] <= 1)),
+    'candidatos com competências entre 0 e 1');
+
+  const prog: Trabalhador = { competencias: { programacao: 0.9, design: 0.2, testes: 0.3 }, felicidade: 70 };
+  const designer: Trabalhador = { competencias: { programacao: 0.2, design: 0.9, testes: 0.3 }, felicidade: 70 };
+  const p = {
+    tipo: 'jogo' as TipoSoftware, trabalhoTotal: 1000, trabalhoFeito: 0,
+    feito: { programacao: 0, design: 0, testes: 0 }, somaQualidade: { programacao: 0, design: 0, testes: 0 },
+  };
+  verificar(areaDeTrabalho(p, prog) === 'programacao' && areaDeTrabalho(p, designer) === 'design',
+    'cada um trabalha na sua especialidade');
+  p.feito.programacao = totalDaArea(p, 'programacao');
+  verificar(areaDeTrabalho(p, prog) === 'testes', 'acabada a programação, o programador passa para a sua melhor área seguinte');
+
+  const soProg = estimarProjeto([prog, prog], 'jogo', []);
+  const mista = estimarProjeto([prog, designer], 'jogo', []);
+  verificar(mista.meses < soProg.meses, 'um jogo com designer acaba mais depressa do que só com programadores');
+  verificar(mista.qualidade > soProg.qualidade + 0.2, 'e com muito melhor qualidade');
+  verificar(estimarProjeto([], 'utilitario', []).meses === Infinity, 'sem equipa não acaba');
+
+  // A previsão bate com a simulação a sério (mesmo funcionário, utilitário base)
+  const r = novoJogo(5);
+  colocarSecretaria(r, 3, 3);
+  contratar(r, 0);
+  const f = r.funcionarios[0];
+  const previsto = estimarProjeto([f], 'utilitario', []);
+  iniciarProjeto(r, '', 'utilitario');
+  let dias = 0;
+  while (r.produtos.length === 0 && dias < 400) {
+    avancar(r, MIN_POR_DIA);
+    dias++;
+  }
+  verificar(Math.abs(dias / 30 - previsto.meses) < 0.25, `a previsão de duração acerta (${previsto.meses.toFixed(2)} vs ${(dias / 30).toFixed(2)} meses)`);
+  verificar(Math.abs(r.produtos[0].qualidade - previsto.qualidade) < 0.02, 'a previsão de qualidade acerta');
 }
 
 console.log(`Testes: ${testes} OK`);

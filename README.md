@@ -47,19 +47,25 @@ Em `npm run dev` ficam disponíveis na consola `__jogo` (estado) e `__ecra(x, z)
 ## Regras do jogo (atuais)
 
 - Cada mês tem 30 dias. Os funcionários chegam por volta das 8h, trabalham das 9h às 17h e vão para casa.
-- Salários e renda (1 500 €) são pagos no fecho do mês. Salário de um candidato = 1 000 € + 2 500 € × competência.
-- A qualidade de um produto depende da competência média de quem trabalhou nele. Duas pessoas fazem cerca de
-  13 000 pontos de trabalho por mês.
+- Começas com 25 000 €. Salários e renda (1 500 €) são pagos no fecho do mês.
+- **Competências:** cada pessoa tem programação, design e testes (0–100), com uma especialidade forte (45–95) e as
+  outras duas áreas mais fracas (20–50). Salário = 1 000 € + 2 500 € × média das três.
+- Cada tipo de software divide o trabalho pelas três áreas (por exemplo, um jogo tem 45% de design). Cada pessoa
+  trabalha na área por acabar em que é melhor, a competência × (0,5 + felicidade/200) pontos por minuto. O projeto
+  acaba quando todas as áreas estão feitas.
+- **Qualidade** = média das áreas, pesada pela parte de cada uma. Cada área vale a competência de quem a fez × 1,2,
+  com máximo de 100%. Sem um designer, um jogo demora e sai fraco.
+- O painel de novo projeto prevê a duração e a qualidade com a equipa atual (`estimarProjeto` em `sim.ts`).
 - Abaixo de −10 000 € a empresa vai à falência.
 
 ### Tipos de software
 
 | Tipo | Desbloqueia com | Trabalho base | Vendas no 1.º mês* | Queda/mês | Notas |
 |---|---|---|---|---|---|
-| Utilitário | — | 20 000 | 6 000 € | 20% | rápido, vendas modestas |
-| Editor de texto | 1 produto | 35 000 | 4 900 € | 15% | vende durante muito tempo |
-| Antivírus | 2 produtos | 40 000 | 3 300 € | 10% | começa fraco, quase não cai |
-| Jogo | 3 produtos | 50 000 | 19 500 € | 40% | vende muito no início; qualidade conta a dobrar (qualidade^1,5) |
+| Utilitário | — | 20 000 | 6 900 € | 20% | rápido, vendas modestas |
+| Editor de texto | 1 produto | 35 000 | 5 600 € | 15% | vende durante muito tempo |
+| Antivírus | 2 produtos | 40 000 | 3 800 € | 10% | começa fraco, quase não cai |
+| Jogo | 3 produtos | 50 000 | 22 400 € | 40% | vende muito no início; qualidade conta a dobrar (qualidade^1,5) |
 
 \* com qualidade 100%, sem funcionalidades e com o mercado livre. Os valores estão em `TIPOS`, em `src/sim.ts`.
 
@@ -84,8 +90,11 @@ desbloqueados, o projeto que acabam em 3 meses ou menos e que rende mais por pon
 | só utilitários | como o razoável, mas nunca diversifica | acaba abaixo do razoável |
 | expansão rápida | 6 pessoas no 1.º mês | arriscada: falência em 2+ sementes e dívida em pelo menos metade |
 
-Resultado atual (mediana): o razoável acaba com cerca de **85k** (pior semente: 23k; caixa mínima: 10k) e o "só
-utilitários" com 60k. A expansão rápida vai à falência em 2 das 8 sementes, mas quem sobrevive acaba com cerca de 216k.
+Resultado atual (mediana): o razoável acaba com cerca de **111k** (pior semente: 5k; caixa mínima: 4k) e o "só
+utilitários" com 67k. O passivo vai à falência no mês 24. A expansão rápida vai à falência em 3 das 8 sementes, mas quem
+sobrevive acaba com cerca de 400k.
+
+Para depurar uma corrida: `DIARIO="razoável:3" npm run simtest` mostra as mensagens do jogo dessa corrida.
 
 **Desequilíbrio conhecido (aviso no simtest):** com vários tipos de software, uma equipa grande que aguente os
 primeiros meses ganha mais do que o razoável. A resolver no ponto 4 (eficiência das equipas).

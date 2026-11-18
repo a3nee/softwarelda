@@ -23,7 +23,7 @@ export const MESES = [
 // ---------------------------------------------------------------------------
 
 export const ECON = {
-  dinheiroInicial: 30000,
+  dinheiroInicial: 25000,
   rendaMensal: 1500,
   custoSecretaria: 500,
   custoParede: 100, // por segmento de uma célula
@@ -37,6 +37,16 @@ export const ECON = {
 // ---------------------------------------------------------------------------
 // Tipos de software e funcionalidades
 // ---------------------------------------------------------------------------
+
+export type Area = 'programacao' | 'design' | 'testes';
+export const AREAS: Area[] = ['programacao', 'design', 'testes'];
+export const NOME_AREA: Record<Area, string> = { programacao: 'Programação', design: 'Design', testes: 'Testes' };
+/** Competência (0–1) em cada área. */
+export type Competencias = Record<Area, number>;
+
+export function competenciaMedia(c: Competencias): number {
+  return (c.programacao + c.design + c.testes) / 3;
+}
 
 export type TipoSoftware = 'utilitario' | 'editor' | 'antivirus' | 'jogo';
 
@@ -57,6 +67,7 @@ export interface DefTipo {
   vendas: number; // € no 1.º mês com qualidade 100%, sem funcionalidades e com o mercado livre
   queda: number; // vendas do mês seguinte = vendas × queda
   exigencia: number; // vendas × qualidade^exigencia (os jogos castigam mais a falta de qualidade)
+  areas: Competencias; // parte do trabalho de cada área (soma 1)
   funcionalidades: Funcionalidade[];
 }
 
@@ -67,9 +78,10 @@ export const TIPOS: Record<TipoSoftware, DefTipo> = {
     descricao: 'Pequeno e rápido de fazer. Vendas modestas, que caem depressa.',
     produtosNecessarios: 0,
     trabalho: 20000,
-    vendas: 6000,
+    vendas: 6900,
     queda: 0.8,
     exigencia: 1,
+    areas: { programacao: 0.6, design: 0.2, testes: 0.2 },
     funcionalidades: [
       { id: 'grafica', nome: 'Interface gráfica', trabalho: 6000, valor: 0.25, requer: [] },
       { id: 'agendamento', nome: 'Tarefas agendadas', trabalho: 5000, valor: 0.2, requer: ['grafica'] },
@@ -82,9 +94,10 @@ export const TIPOS: Record<TipoSoftware, DefTipo> = {
     descricao: 'Mais trabalho, mas continua a vender durante muito tempo.',
     produtosNecessarios: 1,
     trabalho: 35000,
-    vendas: 4900,
+    vendas: 5600,
     queda: 0.85,
     exigencia: 1,
+    areas: { programacao: 0.5, design: 0.3, testes: 0.2 },
     funcionalidades: [
       { id: 'corretor', nome: 'Corretor ortográfico', trabalho: 8000, valor: 0.3, requer: [] },
       { id: 'formatacao', nome: 'Formatação rica', trabalho: 10000, valor: 0.35, requer: [] },
@@ -98,9 +111,10 @@ export const TIPOS: Record<TipoSoftware, DefTipo> = {
     descricao: 'Vendas baixas no lançamento, mas os clientes ficam: as vendas quase não caem.',
     produtosNecessarios: 2,
     trabalho: 40000,
-    vendas: 3300,
+    vendas: 3800,
     queda: 0.9,
     exigencia: 1,
+    areas: { programacao: 0.5, design: 0.1, testes: 0.4 },
     funcionalidades: [
       { id: 'temporeal', nome: 'Proteção em tempo real', trabalho: 12000, valor: 0.4, requer: [] },
       { id: 'firewall', nome: 'Firewall', trabalho: 10000, valor: 0.3, requer: ['temporeal'] },
@@ -113,9 +127,10 @@ export const TIPOS: Record<TipoSoftware, DefTipo> = {
     descricao: 'Muito trabalho e vendas fortes, mas só no início. Exige uma equipa competente.',
     produtosNecessarios: 3,
     trabalho: 50000,
-    vendas: 19500,
+    vendas: 22400,
     queda: 0.6,
     exigencia: 1.5,
+    areas: { programacao: 0.4, design: 0.45, testes: 0.15 },
     funcionalidades: [
       { id: 'graficos3d', nome: 'Gráficos 3D', trabalho: 20000, valor: 0.5, requer: [] },
       { id: 'historia', nome: 'Modo história', trabalho: 12000, valor: 0.3, requer: [] },
@@ -232,7 +247,7 @@ export interface Celula {
 export interface Funcionario {
   id: number;
   nome: string;
-  competencia: number; // 0..1
+  competencias: Competencias;
   salario: number; // € por mês
   felicidade: number; // 0..100
   secretariaId: number | null;
@@ -247,7 +262,7 @@ export interface Funcionario {
 
 export interface Candidato {
   nome: string;
-  competencia: number;
+  competencias: Competencias;
   salario: number;
 }
 
@@ -261,9 +276,10 @@ export interface Projeto {
   nome: string;
   tipo: TipoSoftware;
   funcionalidades: string[];
-  trabalhoFeito: number;
+  trabalhoFeito: number; // soma de feito (para a barra de progresso)
   trabalhoTotal: number;
-  somaCompetencia: number; // para calcular a qualidade
+  feito: Competencias; // pontos feitos em cada área (o total de cada área é trabalhoTotal × areas do tipo)
+  somaQualidade: Competencias; // Σ rendimento × competência, por área, para calcular a qualidade
 }
 
 export interface Produto {
@@ -363,11 +379,18 @@ export function mensagem(s: Estado, texto: string): void {
 export function gerarCandidatos(s: Estado): void {
   s.candidatos = [];
   for (let i = 0; i < 3; i++) {
-    const competencia = Math.round((0.25 + aleatorio(s) * 0.6) * 100) / 100;
-    const salario = Math.round((ECON.salarioBase + competencia * ECON.salarioPorCompetencia) / 50) * 50;
+    // Uma especialidade forte; as outras áreas mais fracas.
+    const especialidade = escolher(s, AREAS);
+    const competencias = {} as Competencias;
+    for (const a of AREAS) {
+      const v = a === especialidade ? 0.45 + aleatorio(s) * 0.5 : 0.2 + aleatorio(s) * 0.3;
+      competencias[a] = Math.round(v * 100) / 100;
+    }
+    const salario = Math.round(
+      (ECON.salarioBase + competenciaMedia(competencias) * ECON.salarioPorCompetencia) / 50) * 50;
     s.candidatos.push({
       nome: `${escolher(s, NOMES)} ${escolher(s, APELIDOS)}`,
-      competencia,
+      competencias,
       salario,
     });
   }
@@ -627,7 +650,7 @@ export function contratar(s: Estado, indice: number): Resultado {
   const f: Funcionario = {
     id: s.proximoId++,
     nome: c.nome,
-    competencia: c.competencia,
+    competencias: { ...c.competencias },
     salario: c.salario,
     felicidade: 70,
     secretariaId: null,
@@ -679,7 +702,8 @@ export function iniciarProjeto(
     funcionalidades: comDependencias(tipo, funcionalidades),
     trabalhoFeito: 0,
     trabalhoTotal: trabalhoDoProjeto(tipo, funcionalidades),
-    somaCompetencia: 0,
+    feito: { programacao: 0, design: 0, testes: 0 },
+    somaQualidade: { programacao: 0, design: 0, testes: 0 },
   };
   mensagem(s, `Começou o desenvolvimento de «${limpo}» (${def.nome.toLowerCase()}).`);
   return { ok: true };
@@ -704,9 +728,85 @@ export function vendasIniciais(tipo: TipoSoftware, funcionalidades: string[], qu
   return def.vendas * valorDoProjeto(tipo, funcionalidades) * qualidade ** def.exigencia * mercado;
 }
 
+// ---------------------------------------------------------------------------
+// Trabalho por áreas
+// ---------------------------------------------------------------------------
+
+/** O mínimo que o trabalho por áreas precisa de saber de quem trabalha. */
+export interface Trabalhador {
+  competencias: Competencias;
+  felicidade: number;
+}
+
+type TrabalhoPorAreas = Pick<Projeto, 'tipo' | 'trabalhoTotal' | 'trabalhoFeito' | 'feito' | 'somaQualidade'>;
+
+export function totalDaArea(p: Pick<Projeto, 'tipo' | 'trabalhoTotal'>, a: Area): number {
+  return p.trabalhoTotal * TIPOS[p.tipo].areas[a];
+}
+
+/** Pontos por minuto de um trabalhador numa área. */
+export function rendimento(f: Trabalhador, a: Area): number {
+  return f.competencias[a] * (0.5 + f.felicidade / 200);
+}
+
+/** Cada um trabalha na área por acabar em que é mais competente (null se já está tudo feito). */
+export function areaDeTrabalho(p: TrabalhoPorAreas, f: Trabalhador): Area | null {
+  let melhor: Area | null = null;
+  for (const a of AREAS)
+    if (p.feito[a] < totalDaArea(p, a) && (melhor === null || f.competencias[a] > f.competencias[melhor])) melhor = a;
+  return melhor;
+}
+
+function trabalharUmMinuto(p: TrabalhoPorAreas, f: Trabalhador, minutos: number): void {
+  const a = areaDeTrabalho(p, f);
+  if (!a) return;
+  const r = rendimento(f, a) * minutos;
+  p.feito[a] += r;
+  p.somaQualidade[a] += r * f.competencias[a];
+  p.trabalhoFeito += r;
+}
+
+export function projetoAcabado(p: TrabalhoPorAreas): boolean {
+  return AREAS.every((a) => p.feito[a] >= totalDaArea(p, a));
+}
+
+/** Qualidade (0–1): média das áreas, pesada pela parte de cada uma; cada área vale a competência de quem a fez × 1,2. */
+export function qualidadeDoProjeto(p: TrabalhoPorAreas): number {
+  let q = 0;
+  for (const a of AREAS) {
+    const peso = TIPOS[p.tipo].areas[a];
+    if (peso > 0) q += peso * Math.min(1, (p.somaQualidade[a] / Math.max(1e-9, p.feito[a])) * 1.2);
+  }
+  return q;
+}
+
+/**
+ * Previsão para a interface e para os jogadores automáticos: meses até acabar e qualidade final,
+ * se esta equipa trabalhar 8 h por dia (passos de 1 h). meses = Infinity se não acabar em 3 anos.
+ */
+export function estimarProjeto(
+  equipa: Trabalhador[], tipo: TipoSoftware, funcionalidades: string[],
+): { meses: number; qualidade: number } {
+  const p: TrabalhoPorAreas = {
+    tipo,
+    trabalhoTotal: trabalhoDoProjeto(tipo, funcionalidades),
+    trabalhoFeito: 0,
+    feito: { programacao: 0, design: 0, testes: 0 },
+    somaQualidade: { programacao: 0, design: 0, testes: 0 },
+  };
+  if (equipa.length === 0) return { meses: Infinity, qualidade: 0 };
+  const LIMITE = 36 * DIAS_POR_MES * 8;
+  let horas = 0;
+  while (!projetoAcabado(p) && horas < LIMITE) {
+    for (const f of equipa) trabalharUmMinuto(p, f, 60);
+    horas++;
+  }
+  return { meses: projetoAcabado(p) ? horas / 8 / DIAS_POR_MES : Infinity, qualidade: qualidadeDoProjeto(p) };
+}
+
 function lancarProjeto(s: Estado): void {
   const p = s.projeto!;
-  const qualidade = Math.min(1, (p.somaCompetencia / Math.max(1, p.trabalhoFeito)) * 1.2);
+  const qualidade = qualidadeDoProjeto(p);
   const mercado = fatorMercado(s, p.tipo);
   const produto: Produto = {
     nome: p.nome,
@@ -916,13 +1016,11 @@ function minutoSeguinte(s: Estado): void {
         }
       }
     } else if (f.estado === 'aTrabalhar' && horario && s.projeto) {
-      const rendimento = f.competencia * (0.5 + f.felicidade / 200);
-      s.projeto.trabalhoFeito += rendimento;
-      s.projeto.somaCompetencia += rendimento * f.competencia;
+      trabalharUmMinuto(s.projeto, f, 1);
     }
   }
 
-  if (s.projeto && s.projeto.trabalhoFeito >= s.projeto.trabalhoTotal) lancarProjeto(s);
+  if (s.projeto && projetoAcabado(s.projeto)) lancarProjeto(s);
 
   if (md === 0) fimDoDia(s);
   if (s.minuto % MIN_POR_MES === 0) fimDoMes(s);

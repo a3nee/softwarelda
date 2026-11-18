@@ -4,12 +4,13 @@
 // Termina com erro se alguma meta de equilíbrio falhar.
 import {
   avancar, colocarSecretaria, contratar, ECON, fatorMercado, iniciarProjeto, LISTA_TIPOS, MIN_POR_DIA,
-  MIN_POR_MES, novoJogo, tipoDisponivel, TIPOS, trabalhoDoProjeto, validarFuncionalidades, vendasIniciais,
-  type Estado, type TipoSoftware,
+  MIN_POR_MES, novoJogo, textoData, tipoDisponivel, TIPOS, validarFuncionalidades, vendasIniciais,
+  AREAS, competenciaMedia, estimarProjeto, type Area, type Competencias, type Estado, type TipoSoftware,
 } from './sim.ts';
 
 const MESES = 24;
 const SEMENTES = [1, 2, 3, 4, 5, 6, 7, 8];
+const RESERVA = Number((globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env.RESERVA ?? 6); // meses de despesas que o jogador prudente quer guardar antes de contratar
 
 /** Chamado todos os dias às 07:30, antes de os funcionários chegarem. */
 type Jogador = (s: Estado, dia: number) => void;
@@ -24,13 +25,28 @@ function secretarias(s: Estado, n: number): void {
     if (!colocarSecretaria(s, 3 + (i % 8), 4 + 3 * Math.floor(i / 8)).ok) break;
 }
 
-/** Candidato com melhor relação competência/salário (-1 se não houver). */
+/** Peso médio de cada área nos tipos de software desbloqueados. */
+function pesosAreas(s: Estado): Competencias {
+  const tipos = LISTA_TIPOS.filter((t) => tipoDisponivel(s, t));
+  const r = { programacao: 0, design: 0, testes: 0 };
+  for (const t of tipos) for (const a of AREAS) r[a] += TIPOS[t].areas[a] / tipos.length;
+  return r;
+}
+
+/**
+ * Candidato com melhor valor por euro (-1 se não houver): o que acrescenta onde a equipa é mais
+ * fraca (pesado pelas áreas que os projetos pedem), mais um pouco pela competência geral.
+ */
 function melhorCandidato(s: Estado): number {
+  const pesos = pesosAreas(s);
+  const melhorEquipa = (a: Area) => Math.max(0, ...s.funcionarios.map((f) => f.competencias[a]));
   let melhor = -1;
   let valor = -Infinity;
   s.candidatos.forEach((c, i) => {
-    if (c.competencia / c.salario > valor) {
-      valor = c.competencia / c.salario;
+    const ganho = AREAS.reduce((t, a) => t + pesos[a] * Math.max(0, c.competencias[a] - melhorEquipa(a)), 0)
+      + 0.25 * competenciaMedia(c.competencias);
+    if (ganho / c.salario > valor) {
+      valor = ganho / c.salario;
       melhor = i;
     }
   });
@@ -48,11 +64,6 @@ function despesasMensais(s: Estado): number {
   return s.funcionarios.reduce((t, f) => t + f.salario, 0) + ECON.rendaMensal;
 }
 
-/** Pontos de trabalho que a equipa faz por mês (8 h × 30 dias, com a felicidade atual). */
-function capacidadeMensal(s: Estado): number {
-  return s.funcionarios.reduce((t, f) => t + f.competencia * (0.5 + f.felicidade / 200), 0) * 8 * 60 * 30;
-}
-
 /** Subconjuntos de funcionalidades que respeitam as dependências. */
 function combinacoes(tipo: TipoSoftware): string[][] {
   const ids = TIPOS[tipo].funcionalidades.map((f) => f.id);
@@ -65,23 +76,21 @@ function combinacoes(tipo: TipoSoftware): string[][] {
 }
 
 /**
- * Escolha "razoável": entre os tipos permitidos, o projeto que a equipa acaba em 3 meses
- * ou menos e que rende mais por ponto de trabalho (qualidade esperada, mercado e curva de vendas).
+ * Escolha "razoável": entre os tipos permitidos, o projeto que a equipa acaba em 3 meses ou menos
+ * (pela previsão do jogo) e que rende mais por mês de trabalho (qualidade prevista, mercado e curva
+ * de vendas). Se nada couber em 3 meses, o mais rápido.
  */
 function escolherProjeto(s: Estado, tipos: TipoSoftware[]): { tipo: TipoSoftware; funcionalidades: string[] } {
-  const n = Math.max(1, s.funcionarios.length);
-  const qualidade = Math.min(1, (s.funcionarios.reduce((t, f) => t + f.competencia, 0) / n) * 1.2);
-  const limite = 3 * capacidadeMensal(s);
   let melhor = { tipo: 'utilitario' as TipoSoftware, funcionalidades: [] as string[] };
   let pontuacao = -Infinity;
   for (const tipo of tipos) {
     if (!tipoDisponivel(s, tipo)) continue;
     for (const escolha of combinacoes(tipo)) {
-      const trabalho = trabalhoDoProjeto(tipo, escolha);
-      if (trabalho > limite && !(tipo === 'utilitario' && escolha.length === 0)) continue;
-      const receita = vendasIniciais(tipo, escolha, qualidade, fatorMercado(s, tipo)) / (1 - TIPOS[tipo].queda);
-      if (receita / trabalho > pontuacao) {
-        pontuacao = receita / trabalho;
+      const e = estimarProjeto(s.funcionarios, tipo, escolha);
+      const receita = vendasIniciais(tipo, escolha, e.qualidade, fatorMercado(s, tipo)) / (1 - TIPOS[tipo].queda);
+      const p = e.meses <= 3 ? receita / e.meses : -1e9 - e.meses; // fora do limite: só conta a rapidez
+      if (p > pontuacao) {
+        pontuacao = p;
         melhor = { tipo, funcionalidades: escolha };
       }
     }
@@ -112,7 +121,7 @@ function prudente(tipos: TipoSoftware[]): Jogador {
     novoProjeto(s, tipos);
     const c = s.candidatos[melhorCandidato(s)];
     if (c && s.produtos.length >= 2 && s.funcionarios.length < 6
-      && s.dinheiro > 6 * (despesasMensais(s) + c.salario))
+      && s.dinheiro > RESERVA * (despesasMensais(s) + c.salario))
       contratarMelhor(s);
   };
 }
@@ -158,10 +167,15 @@ interface Corrida {
   caixaMensal: number[]; // dinheiro no fim de cada mês
 }
 
-function correr(jogador: Jogador, semente: number): Corrida {
+// Depuração: DIARIO="razoável:3" mostra as mensagens do jogo dessa corrida.
+const DIARIO = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env.DIARIO;
+
+function correr(jogador: Jogador, semente: number, nome = ''): Corrida {
   const s = novoJogo(semente);
   let minimo = s.dinheiro;
   const caixaMensal: number[] = [];
+  const diario = DIARIO === `${nome}:${semente}`;
+  let vistas = 0;
   for (let dia = 0; dia < MESES * 30 && !s.falencia; dia++) {
     jogador(s, dia);
     minimo = Math.min(minimo, s.dinheiro);
@@ -169,6 +183,11 @@ function correr(jogador: Jogador, semente: number): Corrida {
     avancar(s, MIN_POR_DIA);
     minimo = Math.min(minimo, s.dinheiro);
     if (Math.floor(s.minuto / MIN_POR_MES) > mes) caixaMensal.push(s.dinheiro);
+    if (diario) {
+      const novas = s.mensagens.filter((m) => m.minuto > vistas && !m.texto.includes('não consegue'));
+      for (const m of novas) console.log(`  [${textoData(m.minuto)}] ${m.texto}`);
+      if (s.mensagens.length) vistas = s.mensagens[s.mensagens.length - 1].minuto;
+    }
   }
   const caixa = (m: number) => (m === 0 ? ECON.dinheiroInicial : caixaMensal[m - 1] ?? s.dinheiro);
   const p0 = s.produtos[0];
@@ -203,7 +222,7 @@ const resultados: Record<string, Corrida[]> = {};
 console.log(`Equilíbrio: ${MESES} meses × ${SEMENTES.length} sementes (valores em milhares de €)\n`);
 console.log('Cenário            | Falências | Caixa mín. | Final mín/med/máx | Lucro ano1/ano2 | 1.º lanç. | Produtos | Equipa');
 for (const [nome, jogador] of Object.entries(JOGADORES)) {
-  const r = SEMENTES.map((sem) => correr(jogador, sem));
+  const r = SEMENTES.map((sem) => correr(jogador, sem, nome));
   resultados[nome] = r;
   const vivos = r.filter((c) => c.falenciaMes === null);
   const fal = r.filter((c) => c.falenciaMes !== null).map((c) => c.falenciaMes!);
