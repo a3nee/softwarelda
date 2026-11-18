@@ -10,7 +10,9 @@ import {
   removerSecretaria, secretariaEm, segmento, semDependentes, textoData, tipoDisponivel, TIPOS, totalDaArea,
   trabalhoDoProjeto, vendasIniciais, areaDeTrabalho, bonusQualidade, comprarMelhoria, coordenacaoDe, HORA_FIM,
   HORA_INICIO, MELHORIAS, nivelDaEmpresa, pontosMelhoria, progressoNivel, rendaDe, serieDeLucro, temMelhoria,
-  xpDeLancamento,
+  xpDeLancamento, avaliarEmpresa, rankingEmpresas, podeLevantar, levantarRonda, valorDaRonda, LISTA_RONDAS, RONDAS,
+  LISTA_CAMPANHAS, CAMPANHAS, lancarCampanha, aceitarContrato, pagamentoDoContrato, DIAS_POR_MES,
+  type IdRonda, type IdCampanha, type Projeto, type OfertaContrato,
   type Area, type IdMelhoria, type Aresta, type Competencias, type Estado, type Funcionario, type Mensagem, type Resultado,
   type TipoObjeto, type TipoSoftware,
 } from './sim.ts';
@@ -23,7 +25,8 @@ import { Ambiente } from './ambiente.ts';
 import { guardarDefinicoes, lerDefinicoes, pixelRatio, type Definicoes } from './definicoes.ts';
 import { configurarSom, som } from './som.ts';
 import { desenharGrafico } from './grafico.ts';
-import { ICONE_OBJETO, Menus } from './menus.ts';
+import { Menus } from './menus.ts';
+import { ic, type NomeIcone } from './icones.ts';
 import { PosFx } from './posfx.ts';
 import { Particulas } from './particulas.ts';
 import { Celebracoes, numeroFlutuante } from './celebracoes.ts';
@@ -497,13 +500,13 @@ function sincronizarFuncionarios(dt: number, agora: number): void {
 // ---------------------------------------------------------------------------
 
 type Ferramenta = 'selecionar' | 'parede' | 'porta' | 'secretaria' | 'decoracao' | 'demolir';
-const FERRAMENTAS: { id: Ferramenta; icone: string; nome: string; preco: string; tecla: string; dica: string }[] = [
-  { id: 'selecionar', icone: '🖱️', nome: 'Selecionar', preco: '', tecla: '1', dica: 'Clica num funcionário para ver a ficha. Botão direito roda a câmara, botão do meio arrasta, roda faz zoom (ou WASD e Q/E).' },
-  { id: 'parede', icone: '🧱', nome: 'Parede', preco: euros(ECON.custoParede), tecla: '2', dica: 'Arrasta entre cantos da grelha para desenhar uma parede. Fecha uma zona para criar uma sala.' },
-  { id: 'porta', icone: '🚪', nome: 'Porta', preco: euros(ECON.custoPorta), tecla: '3', dica: 'Clica numa parede para lhe abrir uma porta. Sem porta, ninguém entra na sala.' },
-  { id: 'secretaria', icone: '🖥️', nome: 'Secretária', preco: euros(ECON.custoSecretaria), tecla: '4', dica: 'Clica numa célula para colocar uma secretária. Cada funcionário precisa de uma.' },
-  { id: 'decoracao', icone: '🪴', nome: 'Decoração', preco: '', tecla: '5', dica: 'Escolhe um objeto e clica numa célula. Alegra quem trabalha na mesma sala (fora das salas, quem está perto).' },
-  { id: 'demolir', icone: '🔨', nome: 'Demolir', preco: '', tecla: '6', dica: 'Clica numa parede, porta, secretária ou objeto para o remover, ou arrasta para demolir paredes. Sem reembolso.' },
+const FERRAMENTAS: { id: Ferramenta; icone: NomeIcone; nome: string; preco: string; tecla: string; dica: string }[] = [
+  { id: 'selecionar', icone: 'mouse-pointer-2', nome: 'Selecionar', preco: '', tecla: '1', dica: 'Clica num funcionário para ver a ficha. Botão direito roda a câmara, botão do meio arrasta, roda faz zoom (ou WASD e Q/E).' },
+  { id: 'parede', icone: 'brick-wall', nome: 'Parede', preco: euros(ECON.custoParede), tecla: '2', dica: 'Arrasta entre cantos da grelha para desenhar uma parede. Fecha uma zona para criar uma sala.' },
+  { id: 'porta', icone: 'door-open', nome: 'Porta', preco: euros(ECON.custoPorta), tecla: '3', dica: 'Clica numa parede para lhe abrir uma porta. Sem porta, ninguém entra na sala.' },
+  { id: 'secretaria', icone: 'monitor', nome: 'Secretária', preco: euros(ECON.custoSecretaria), tecla: '4', dica: 'Clica numa célula para colocar uma secretária. Cada funcionário precisa de uma.' },
+  { id: 'decoracao', icone: 'sprout', nome: 'Decoração', preco: '', tecla: '5', dica: 'Escolhe um objeto e clica numa célula. Alegra quem trabalha na mesma sala (fora das salas, quem está perto).' },
+  { id: 'demolir', icone: 'hammer', nome: 'Demolir', preco: '', tecla: '6', dica: 'Clica numa parede, porta, secretária ou objeto para o remover, ou arrasta para demolir paredes. Sem reembolso.' },
 ];
 let ferramenta: Ferramenta = 'selecionar';
 let objetoEscolhido: TipoObjeto = 'planta';
@@ -784,10 +787,34 @@ function definir(e: HTMLElement, html: string): void {
   }
 }
 
-const ICONE_TIPO: Record<TipoSoftware, string> = { utilitario: '🧮', editor: '📝', antivirus: '🛡️', jogo: '🎮' };
+const ICONE_TIPO: Record<TipoSoftware, string> = {
+  utilitario: ic('calculator'), editor: ic('file-text'), antivirus: ic('shield'), jogo: ic('gamepad-2'),
+};
+const ICONE_OBJ: Record<TipoObjeto, NomeIcone> = { planta: 'sprout', sofa: 'sofa', cafe: 'coffee', matraquilhos: 'trophy' };
+const ICONE_CAMPANHA: Record<IdCampanha, NomeIcone> = { redes: 'smartphone', imprensa: 'newspaper', feira: 'presentation' };
+/** Tira o emoji do início das mensagens do jogo (a interface mostra ícones próprios). */
+const semEmoji = (texto: string) => texto.replace(/^(?:\p{Extended_Pictographic}|\uFE0F|\u200D)+\s*/u, '');
+/** Valor curto: 3,4 M€ · 650 k€ · 900 €. */
+function compacto(v: number): string {
+  const a = Math.abs(v);
+  const sinal = v < 0 ? '−' : '';
+  if (a >= 1e6) return `${sinal}${(a / 1e6).toFixed(a >= 1e7 ? 0 : 1).replace('.', ',')} M€`;
+  if (a >= 1e4) return `${sinal}${Math.round(a / 1e3)} k€`;
+  return euros(v);
+}
+const percentagem = (v: number) => `${v >= 0 ? '+' : '−'}${Math.abs(v * 100).toFixed(1).replace('.', ',')}%`;
+/** Linha de tendência em SVG. */
+function sparkline(valores: number[], largura = 84, altura = 26): string {
+  const tendencia = valores.length > 1 && valores[valores.length - 1] < valores[0] ? 'desce' : 'sobe';
+  if (valores.length < 2) return `<svg class="spark" viewBox="0 0 ${largura} ${altura}"></svg>`;
+  const min = Math.min(...valores);
+  const d = Math.max(...valores) - min || 1;
+  const pts = valores.map((v, i) => `${((i / (valores.length - 1)) * largura).toFixed(1)},${(altura - 2 - ((v - min) / d) * (altura - 4)).toFixed(1)}`).join(' ');
+  return `<svg class="spark ${tendencia}" viewBox="0 0 ${largura} ${altura}" preserveAspectRatio="none"><polyline points="${pts}"/></svg>`;
+}
 const SIGLA_AREA: Record<Area, string> = { programacao: 'Prog', design: 'Des', testes: 'Test' };
 const COR_FEL = (f: number) => (f >= 70 ? '#34d399' : f >= 40 ? '#fbbf24' : '#f87171');
-const CARA_FEL = (f: number) => (f >= 85 ? '😄' : f >= 70 ? '🙂' : f >= 40 ? '😐' : '😟');
+const CARA_FEL = (f: number) => ic(f >= 85 ? 'laugh' : f >= 70 ? 'smile' : f >= 40 ? 'meh' : 'frown');
 const mesesTexto = (m: number) => m.toFixed(1).replace('.', ',');
 
 function avatar(nome: string, area: Area, grande = false): string {
@@ -811,32 +838,47 @@ function classeEstado(f: Funcionario): string {
 
 // --- Barra de cima ---------------------------------------------------------
 
-const topo = el(`<div id="topo" class="ui vidro hud">
-  <div class="marca"><span class="logo">SL</span><span class="empresa"></span></div>
-  <button class="nivel-emblema" data-jogo="melhorias" title="Nível da empresa e melhorias (M)">
-    <svg viewBox="0 0 40 40"><defs><linearGradient id="gradNivel" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#22d3ee"/><stop offset="0.55" stop-color="#8b5cf6"/><stop offset="1" stop-color="#f472b6"/>
-    </linearGradient></defs><circle class="fundo" cx="20" cy="20" r="17"/><circle class="arco" cx="20" cy="20" r="17"/></svg>
-    <b class="n">1</b><span class="pontos"></span>
-  </button>
-  <div class="chip dinheiro" title="Dinheiro em caixa"><span class="ic">💶</span><b class="valor"></b><span class="delta"></span></div>
-  <div class="chip saldo" title="Previsão para o próximo fecho do mês: vendas − salários − renda"><span class="ic">📈</span><span class="valor"></span></div>
-  <div class="chip" title="Funcionários"><span class="ic">👥</span><span class="equipa"></span></div>
-  <div class="chip" title="Felicidade média"><span class="ic cara">😊</span><span class="felicidade"></span></div>
-  <div class="chip serie" title="Meses seguidos com lucro: cada um dá mais experiência"><span class="ic">🔥</span><span class="valor"></span></div>
-  <div class="chip relogio"><span class="ic ceu">☀️</span><span class="data"></span><b class="hora"></b></div>
-  <div class="velocidades">
-    <button data-vel="0" title="Pausa (Espaço)">⏸</button><button data-vel="1" title="Normal">▶</button>
-    <button data-vel="2" title="Rápido">▶▶</button><button data-vel="3" title="Muito rápido">▶▶▶</button>
+const topo = el(`<div id="topo" class="ui hud">
+  <div class="grupo vidro marca">
+    <span class="logo">SL</span><span class="empresa"></span>
+    <button class="nivel-emblema" data-jogo="melhorias" title="Nível da empresa e melhorias (M)">
+      <svg viewBox="0 0 40 40"><defs><linearGradient id="gradNivel" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#7c8cff"/><stop offset="1" stop-color="#c084fc"/>
+      </linearGradient></defs><circle class="fundo" cx="20" cy="20" r="17"/><circle class="arco" cx="20" cy="20" r="17"/></svg>
+      <b class="n">1</b><span class="pontos"></span>
+    </button>
   </div>
-  <div class="direita">
+  <div class="grupo vidro numeros">
+    <div class="chip dinheiro" title="Dinheiro em caixa"><span class="ic">${ic('wallet')}</span><b class="valor"></b><span class="delta"></span></div>
+    <div class="chip saldo" title="Previsão para o próximo fecho do mês: vendas − salários − renda"><span class="ic seta">${ic('trending-up')}</span><span class="valor"></span></div>
+    <div class="chip avaliacao-topo" data-jogo="mercado" title="Avaliação da empresa e lugar no ranking (separador Mercado)"><span class="ic">${ic('landmark')}</span><span class="valor"></span><span class="lugar"></span></div>
+    <div class="chip" title="Funcionários"><span class="ic">${ic('users')}</span><span class="equipa"></span></div>
+    <div class="chip" title="Felicidade média"><span class="ic cara">${ic('smile')}</span><span class="felicidade"></span></div>
+    <div class="chip serie" title="Meses seguidos com lucro: cada um dá mais experiência"><span class="ic">${ic('flame')}</span><span class="valor"></span></div>
+  </div>
+  <div class="grupo vidro tempo">
+    <div class="chip relogio"><span class="ic ceu">${ic('sun')}</span><span class="data"></span><b class="hora"></b></div>
+    <div class="velocidades">
+      <button data-vel="0" title="Pausa (Espaço)">${ic('pause')}</button><button data-vel="1" title="Normal">${ic('play')}</button>
+      <button data-vel="2" title="Rápido">${ic('fast-forward')}</button><button data-vel="3" title="Muito rápido">${ic('zap')}</button>
+    </div>
+  </div>
+  <div class="grupo vidro direita">
     <span class="guardado"></span>
-    <button data-jogo="guardar" class="icone" title="Guardar (Ctrl+S)">💾</button>
-    <button data-jogo="menu" class="icone" title="Menu (Esc)">☰</button>
+    <button data-jogo="guardar" class="icone" title="Guardar (Ctrl+S)">${ic('save')}</button>
+    <button data-jogo="menu" class="icone" title="Menu (Esc)">${ic('menu')}</button>
   </div>
 </div>`);
 
 topo.addEventListener('click', (ev) => {
+  const chip = (ev.target as HTMLElement).closest<HTMLElement>('[data-jogo="mercado"]');
+  if (chip) {
+    som.clique();
+    separador = 'mercado';
+    painelAberto = true;
+    atualizarUI();
+    return;
+  }
   const b = (ev.target as HTMLElement).closest('button');
   if (!b) return;
   som.clique();
@@ -850,11 +892,11 @@ topo.addEventListener('click', (ev) => {
 // --- Ferramentas -----------------------------------------------------------
 
 const barraFerramentas = el(`<div id="ferramentas" class="ui vidro hud">${FERRAMENTAS.map((f) => `
-  <button data-ferr="${f.id}" class="ferr" title="${f.dica}"><span class="ic">${f.icone}</span><span class="nome">${f.nome}</span>
+  <button data-ferr="${f.id}" class="ferr" title="${f.dica}"><span class="ic">${ic(f.icone)}</span><span class="nome">${f.nome}</span>
     ${f.preco ? `<span class="preco">${f.preco}</span>` : ''}<kbd>${f.tecla}</kbd></button>`).join('')}</div>`);
 const barraObjetos = el(`<div id="objetos" class="ui vidro hud">${LISTA_OBJETOS.map((o) => `
-  <button data-obj="${o}" class="obj" title="${OBJETOS[o].descricao}"><span class="ic">${ICONE_OBJETO[o]}</span>
-    <span class="txt"><b>${OBJETOS[o].nome}</b><small>${euros(OBJETOS[o].custo)} · 😊 +${OBJETOS[o].felicidade}</small></span></button>`).join('')}</div>`);
+  <button data-obj="${o}" class="obj" title="${OBJETOS[o].descricao}"><span class="ic">${ic(ICONE_OBJ[o])}</span>
+    <span class="txt"><b>${OBJETOS[o].nome}</b><small>${euros(OBJETOS[o].custo)} · felicidade +${OBJETOS[o].felicidade}</small></span></button>`).join('')}</div>`);
 const dica = el(`<div id="dica" class="ui hud"></div>`);
 
 barraFerramentas.addEventListener('click', (ev) => {
@@ -873,27 +915,28 @@ barraObjetos.addEventListener('click', (ev) => {
 
 // --- Painel lateral com separadores ----------------------------------------
 
-type Separador = 'projetos' | 'equipa' | 'contratar' | 'produtos' | 'numeros';
-const SEPARADORES: { id: Separador; icone: string; nome: string }[] = [
-  { id: 'projetos', icone: '📁', nome: 'Projetos' },
-  { id: 'equipa', icone: '👥', nome: 'Equipa' },
-  { id: 'contratar', icone: '🤝', nome: 'Contratar' },
-  { id: 'produtos', icone: '📦', nome: 'Produtos' },
-  { id: 'numeros', icone: '📊', nome: 'Números' },
+type Separador = 'projetos' | 'equipa' | 'contratar' | 'produtos' | 'mercado' | 'numeros';
+const SEPARADORES: { id: Separador; icone: NomeIcone; nome: string }[] = [
+  { id: 'projetos', icone: 'folder-kanban', nome: 'Projetos' },
+  { id: 'equipa', icone: 'users', nome: 'Equipa' },
+  { id: 'contratar', icone: 'user-plus', nome: 'Contratar' },
+  { id: 'produtos', icone: 'package', nome: 'Produtos' },
+  { id: 'mercado', icone: 'building-2', nome: 'Mercado' },
+  { id: 'numeros', icone: 'chart-column', nome: 'Números' },
 ];
 let separador: Separador = 'projetos';
 let painelAberto = true;
 
 const lateral = el(`<div id="lateral" class="ui vidro hud">
   <nav class="separadores">${SEPARADORES.map((t) => `
-    <button data-sep="${t.id}" title="${t.nome}"><span class="ic">${t.icone}</span><span class="nome">${t.nome}</span><i class="badge"></i></button>`).join('')}
-    <button data-painel title="Esconder / mostrar o painel" class="recolher">⟩</button>
+    <button data-sep="${t.id}" title="${t.nome}"><span class="ic">${ic(t.icone)}</span><span class="nome">${t.nome}</span><i class="badge"></i></button>`).join('')}
+    <button data-painel title="Esconder / mostrar o painel" class="recolher">${ic('chevron-right')}</button>
   </nav>
   <div class="conteudo">
     <section data-sec="projetos">
       <div id="lista-projetos"></div>
       <div class="cartao novo-projeto">
-        <h3>✨ Novo projeto</h3>
+        <h3>${ic('sparkles')} Novo projeto</h3>
         <input type="text" id="nome-projeto" placeholder="Nome do produto (opcional)" maxlength="30">
         <div id="config-projeto"></div>
       </div>
@@ -901,15 +944,16 @@ const lateral = el(`<div id="lateral" class="ui vidro hud">
     <section data-sec="equipa"><div id="p-equipa"></div></section>
     <section data-sec="contratar"><div id="p-candidatos"></div></section>
     <section data-sec="produtos"><div id="p-produtos"></div></section>
+    <section data-sec="mercado"><div id="p-mercado"></div></section>
     <section data-sec="numeros">
-      <div class="cartao"><h3>📈 Últimos 24 meses</h3><canvas id="grafico"></canvas>
+      <div class="cartao"><h3>${ic('chart-line')} Últimos 24 meses</h3><canvas id="grafico"></canvas>
         <div class="legenda"><span class="l-rec">Receitas</span><span class="l-desp">Despesas</span><span class="l-caixa">Caixa</span></div></div>
       <div id="p-numeros"></div>
     </section>
   </div>
 </div>`);
 
-const caixaNoticias = el(`<div id="noticias" class="ui vidro hud"><div class="cab"><span>📰 Notícias</span><button data-recolher title="Esconder / mostrar">–</button></div><div class="lista"></div></div>`);
+const caixaNoticias = el(`<div id="noticias" class="ui vidro hud"><div class="cab"><span>${ic('newspaper')} Notícias</span><button data-recolher title="Esconder / mostrar">${ic('minus')}</button></div><div class="lista"></div></div>`);
 const caixaAvisos = el(`<div id="avisos" class="ui"></div>`);
 const ficha = el(`<div id="ficha" class="ui vidro hud"></div>`);
 const fim = el(`<div id="fim" class="ui"></div>`);
@@ -1048,6 +1092,27 @@ lateral.addEventListener('click', async (ev) => {
       marcacoes.clear();
       if (input) input.value = '';
     }
+  } else if (a === 'modo') {
+    modoNovo = b.dataset.modo === 'contrato' ? 'contrato' : 'produto';
+  } else if (a === 'oferta') {
+    ofertaEscolhida = Number(b.dataset.oferta);
+  } else if (a === 'contrato') {
+    const equipa = equipaEscolhida();
+    const r = ofertaEscolhida === null ? { ok: false, msg: 'Escolhe uma oferta.' }
+      : aceitarContrato(s, ofertaEscolhida, equipa.map((f) => f.id));
+    resultado(r, som.evento);
+    if (r.ok) {
+      marcacoes.clear();
+      ofertaEscolhida = null;
+    }
+  } else if (a === 'campanha') {
+    resultado(lancarCampanha(s, Number(b.dataset.id), b.dataset.campanha as IdCampanha), som.dinheiro);
+  } else if (a === 'ronda') {
+    const id = b.dataset.ronda as IdRonda;
+    const d = RONDAS[id];
+    const pct = `${Math.round(d.parte * 100)}%`;
+    if (await confirmar(`Vender <b>${pct}</b> da empresa por <b>${euros(valorDaRonda(s, id))}</b>?<br><small>Os investidores passam a ficar com ${pct} do lucro de cada mês (dividendos).</small>`, 'Vender'))
+      resultado(levantarRonda(s, id), som.dinheiro);
   } else if (a === 'cancelar') {
     if (await confirmar('Cancelar o projeto? <b>O trabalho feito perde-se.</b>', 'Cancelar projeto'))
       resultado(cancelarProjeto(s, Number(b.dataset.id)));
@@ -1073,6 +1138,8 @@ lateral.addEventListener('change', (ev) => {
 });
 
 // Escolhas do próximo projeto (estado só da interface)
+let modoNovo: 'produto' | 'contrato' = 'produto';
+let ofertaEscolhida: number | null = null;
 let tipoEscolhido: TipoSoftware = 'utilitario';
 let funcEscolhidas: string[] = [];
 /** Escolhas feitas à mão nas caixas da equipa; quem não foi mexido entra se estiver sem projeto. */
@@ -1100,22 +1167,38 @@ function confirmar(texto: string, sim: string): Promise<boolean> {
 // --- Conteúdo dos separadores ----------------------------------------------
 
 function htmlListaProjetos(): string {
-  if (s.projetos.length === 0) return '<div class="vazio">Nenhum projeto em curso. Escolhe um tipo e a equipa aqui em baixo.</div>';
+  if (s.projetos.length === 0) return '<div class="vazio">Nenhum projeto em curso. Começa um produto ou aceita um contrato aqui em baixo.</div>';
+  const nivel = nivelDaEmpresa(s);
   return s.projetos.map((p) => {
     const pct = Math.min(100, (p.trabalhoFeito / p.trabalhoTotal) * 100);
     const funcs = p.funcionalidades.map((id) => TIPOS[p.tipo].funcionalidades.find((f) => f.id === id)!.nome);
     const membros = membrosDe(s, p.id);
     const prev = mesesRestantes(p, membros, coordenacaoDe(s));
-    return `<div class="cartao projeto">
-      <div class="cab"><span class="ic-tipo">${ICONE_TIPO[p.tipo]}</span>
-        <div class="cresce"><b>${esc(p.nome)}</b><small>${TIPOS[p.tipo].nome}${funcs.length ? ` · ${funcs.join(', ')}` : ''}</small></div>
-        <button class="mini perigo" data-acao="cancelar" data-id="${p.id}" title="Cancelar (o trabalho perde-se)">✕</button></div>
-      <div class="progresso"><div style="width:${pct.toFixed(1)}%"></div><span>${pct.toFixed(0)}%</span></div>
-      <div class="stats3">
-        <div><b>${Math.round(Math.min(1, qualidadeDoProjeto(p) + bonusQualidade(s)) * 100)}%</b><small>qualidade</small></div>
+    const q = Math.min(1, qualidadeDoProjeto(p) + bonusQualidade(s));
+    const c = p.contrato;
+    const dias = c ? Math.ceil((c.prazo - s.minuto) / MIN_POR_DIA) : 0;
+    const sub = c ? `Contrato · ${esc(c.cliente)}` : `${TIPOS[p.tipo].nome}${funcs.length ? ` · ${funcs.join(', ')}` : ''}`;
+    const stats = c
+      ? `<div><b>${Math.round(q * 100)}%</b><small>qualidade</small></div>
+        <div><b class="${c.atrasado ? 'mau' : dias <= 5 ? 'aviso' : ''}">${c.atrasado ? 'atrasado' : dias <= 0 ? 'hoje' : `${dias} d`}</b><small>prazo</small></div>
+        <div><b>${compacto(pagamentoDoContrato(c, q))}</b><small>pagamento</small></div>`
+      : `<div><b>${Math.round(q * 100)}%</b><small>qualidade</small></div>
         <div><b>${Number.isFinite(prev) ? mesesTexto(prev) : '—'}</b><small>${Number.isFinite(prev) ? 'meses' : 'parado'}</small></div>
-        <div><b>${membros.length}</b><small>${membros.length === 1 ? 'pessoa' : 'pessoas'}</small></div>
-      </div>
+        <div><b>${p.hype ? `+${Math.round(p.hype * 100)}%` : '—'}</b><small>expectativa</small></div>`;
+    const marketing = c ? '' : `<div class="marketing"><div class="rotulo">${ic('megaphone')} Marketing</div><div class="campanhas">${LISTA_CAMPANHAS.map((id) => {
+      const d = CAMPANHAS[id];
+      const feita = p.campanhas?.includes(id) ?? false;
+      const bloq = nivel < d.nivel;
+      return `<button class="campanha ${feita ? 'feita' : ''}" data-acao="campanha" data-id="${p.id}" data-campanha="${id}" ${feita || bloq ? 'disabled' : ''}
+        title="${d.descricao} Expectativa +${Math.round(d.hype * 100)}% (menos se já houver muita).">${ic(feita ? 'check' : bloq ? 'lock' : ICONE_CAMPANHA[id])}
+        <span>${d.nome}</span><small>${feita ? 'feita' : bloq ? `nível ${d.nivel}` : euros(d.custo)}</small></button>`;
+    }).join('')}</div></div>`;
+    return `<div class="cartao projeto ${c ? 'contrato' : ''}">
+      <div class="cab"><span class="ic-tipo">${c ? ic('briefcase') : ICONE_TIPO[p.tipo]}</span>
+        <div class="cresce"><b>${esc(p.nome)}</b><small>${sub}</small></div>
+        <button class="mini perigo icone-mini" data-acao="cancelar" data-id="${p.id}" title="Cancelar (o trabalho perde-se)">${ic('x')}</button></div>
+      <div class="progresso"><div style="width:${pct.toFixed(1)}%"></div><span>${pct.toFixed(0)}%</span></div>
+      <div class="stats3">${stats}</div>
       ${AREAS.filter((a) => totalDaArea(p, a) > 0).map((a) => {
         const v = Math.min(100, (p.feito[a] / totalDaArea(p, a)) * 100);
         return `<div class="area a-${a}"><span>${NOME_AREA[a]}</span><div class="barra"><div style="width:${v.toFixed(1)}%"></div></div></div>`;
@@ -1123,12 +1206,40 @@ function htmlListaProjetos(): string {
       <div class="chips-equipa">${membros.length
         ? membros.map((f) => avatar(f.nome, especialidade(f))).join('')
           + (membros.length > 1 ? `<small>rendimento ${Math.round(eficienciaEquipa(membros.length, coordenacaoDe(s)) * 100)}% por pessoa</small>` : '')
-        : '<span class="aviso">⚠ Sem equipa: o projeto está parado.</span>'}</div>
+        : `<span class="aviso">${ic('triangle-alert')} Sem equipa: o projeto está parado.</span>`}</div>
+      ${marketing}
     </div>`;
   }).join('');
 }
 
+function htmlDivisao(tipo: TipoSoftware): string {
+  const d = TIPOS[tipo];
+  return `<div class="divisao">${AREAS.map((a) => {
+    const v = Math.round(d.areas[a] * 100);
+    return `<div class="a-${a}" style="flex:${d.areas[a]}" title="${NOME_AREA[a]} ${v}%">${v >= 15 ? `${SIGLA_AREA[a]} ${v}%` : ''}</div>`;
+  }).join('')}</div>`;
+}
+
+function htmlEscolhaEquipa(equipa: Funcionario[]): string {
+  const pessoas = s.funcionarios.map((f) => {
+    const outro = s.projetos.find((p) => p.id === f.projetoId);
+    const on = equipa.includes(f);
+    return `<label class="opcao-check pessoa-check ${on ? 'on' : ''}"><input type="checkbox" data-membro="${f.id}" ${on ? 'checked' : ''}>${avatar(f.nome, especialidade(f))}
+      <span class="cresce"><b>${esc(f.nome)}</b><small>${AREAS.map((a) => `${SIGLA_AREA[a]} ${Math.round(f.competencias[a] * 100)}`).join(' · ')}${outro ? ` · sai de «${esc(outro.nome)}»` : ''}</small></span></label>`;
+  }).join('');
+  return `<div class="rotulo">Equipa${equipa.length > 1 ? ` · rendimento ${Math.round(eficienciaEquipa(equipa.length, coordenacaoDe(s)) * 100)}% por pessoa` : ''}</div>
+    ${pessoas ? `<div class="lista-checks">${pessoas}</div>` : '<div class="vazio aviso">Contrata alguém primeiro (separador Contratar).</div>'}`;
+}
+
 function htmlConfigProjeto(): string {
+  const modos = `<div class="segmentos modo">
+    <button data-acao="modo" data-modo="produto" class="${modoNovo === 'produto' ? 'ativo' : ''}">${ic('rocket')} Produto próprio</button>
+    <button data-acao="modo" data-modo="contrato" class="${modoNovo === 'contrato' ? 'ativo' : ''}">${ic('briefcase')} Contrato${s.ofertas.length ? ` <i class="conta">${s.ofertas.length}</i>` : ''}</button>
+  </div>`;
+  return modos + (modoNovo === 'contrato' ? htmlConfigContrato() : htmlConfigProduto());
+}
+
+function htmlConfigProduto(): string {
   if (!tipoDisponivel(s, tipoEscolhido)) tipoEscolhido = 'utilitario';
   const d = TIPOS[tipoEscolhido];
   const equipa = equipaEscolhida();
@@ -1142,24 +1253,14 @@ function htmlConfigProjeto(): string {
     const n = TIPOS[t].produtosNecessarios;
     return `<button data-acao="tipo" data-tipo="${t}" class="tipo ${t === tipoEscolhido ? 'ativo' : ''}" ${livre ? '' : 'disabled'}
       title="${livre ? TIPOS[t].descricao : `Precisa de ${n} produto${n === 1 ? '' : 's'} lançado${n === 1 ? '' : 's'}`}">
-      <span class="ic">${livre ? ICONE_TIPO[t] : '🔒'}</span><b>${TIPOS[t].nome}</b>
+      <span class="ic">${livre ? ICONE_TIPO[t] : ic('lock')}</span><b>${TIPOS[t].nome}</b>
       <small>${livre ? `${Math.round(trabalhoDoProjeto(t, []) / 1000)}k pontos` : `${n} produto${n === 1 ? '' : 's'}`}</small></button>`;
-  }).join('');
-  const divisao = AREAS.map((a) => {
-    const v = Math.round(d.areas[a] * 100);
-    return `<div class="a-${a}" style="flex:${d.areas[a]}" title="${NOME_AREA[a]} ${v}%">${v >= 15 ? `${SIGLA_AREA[a]} ${v}%` : ''}</div>`;
   }).join('');
   const funcs = d.funcionalidades.map((f) => {
     const req = f.requer.map((r) => d.funcionalidades.find((o) => o.id === r)!.nome);
     const on = funcEscolhidas.includes(f.id);
-    return `<label class="opcao-check ${on ? 'on' : ''}"><input type="checkbox" data-func="${f.id}" ${on ? 'checked' : ''}><span class="caixa"></span>
+    return `<label class="opcao-check ${on ? 'on' : ''}"><input type="checkbox" data-func="${f.id}" ${on ? 'checked' : ''}><span class="caixa">${ic('check')}</span>
       <span class="cresce"><b>${f.nome}</b><small>+${(f.trabalho / 1000).toFixed(0)}k pontos · +${Math.round(f.valor * 100)}% vendas${req.length ? ` · precisa de ${req.join(', ')}` : ''}</small></span></label>`;
-  }).join('');
-  const pessoas = s.funcionarios.map((f) => {
-    const outro = s.projetos.find((p) => p.id === f.projetoId);
-    const on = equipa.includes(f);
-    return `<label class="opcao-check pessoa-check ${on ? 'on' : ''}"><input type="checkbox" data-membro="${f.id}" ${on ? 'checked' : ''}>${avatar(f.nome, especialidade(f))}
-      <span class="cresce"><b>${esc(f.nome)}</b><small>${AREAS.map((a) => `${SIGLA_AREA[a]} ${Math.round(f.competencias[a] * 100)}`).join(' · ')}${outro ? ` · sai de «${esc(outro.nome)}»` : ''}</small></span></label>`;
   }).join('');
   const meses = previsao.meses;
   const m = Math.round(mercado * 100);
@@ -1167,10 +1268,9 @@ function htmlConfigProjeto(): string {
     <div class="tipos">${tipos}</div>
     <p class="descricao">${d.descricao}</p>
     <div class="rotulo">Trabalho por área</div>
-    <div class="divisao">${divisao}</div>
+    ${htmlDivisao(tipoEscolhido)}
     ${funcs ? `<div class="rotulo">Funcionalidades</div><div class="lista-checks">${funcs}</div>` : ''}
-    <div class="rotulo">Equipa${equipa.length > 1 ? ` · rendimento ${Math.round(eficienciaEquipa(equipa.length, coordenacaoDe(s)) * 100)}% por pessoa` : ''}</div>
-    ${pessoas ? `<div class="lista-checks">${pessoas}</div>` : '<div class="vazio aviso">Contrata alguém primeiro (separador 🤝 Contratar).</div>'}
+    ${htmlEscolhaEquipa(equipa)}
     <div class="previsao">
       <div><small>Duração</small><b>${Number.isFinite(meses) ? `${mesesTexto(meses)} m` : equipa.length ? '> 3 anos' : '—'}</b></div>
       <div><small>Qualidade</small><b>${equipa.length ? `${Math.round(previsao.qualidade * 100)}%` : '—'}</b></div>
@@ -1178,20 +1278,100 @@ function htmlConfigProjeto(): string {
     </div>
     <div class="mercado ${m < 70 ? 'aviso' : ''}" title="Os produtos do mesmo tipo ainda à venda ocupam o mercado."><span>Mercado livre</span>
       <div class="barra"><div style="width:${m}%"></div></div><b>${m}%</b></div>
-    <button data-acao="projeto" class="primario largo">🚀 Começar desenvolvimento · ${trabalhoDoProjeto(tipoEscolhido, funcEscolhidas).toLocaleString('pt-PT')} pontos</button>`;
+    <div class="nota">Durante o desenvolvimento podes fazer campanhas de marketing para vender mais no lançamento.</div>
+    <button data-acao="projeto" class="primario largo">${ic('rocket')} Começar desenvolvimento · ${trabalhoDoProjeto(tipoEscolhido, funcEscolhidas).toLocaleString('pt-PT')} pontos</button>`;
+}
+
+/** Previsão de um contrato com esta equipa: dias de trabalho e qualidade. */
+function preverContrato(o: OfertaContrato, equipa: Funcionario[]): { dias: number; qualidade: number } {
+  const p: Projeto = {
+    id: 0, nome: '', tipo: o.tipo, funcionalidades: [], trabalhoFeito: 0, trabalhoTotal: o.trabalho,
+    feito: { programacao: 0, design: 0, testes: 0 }, somaQualidade: { programacao: 0, design: 0, testes: 0 },
+  };
+  const meses = mesesRestantes(p, equipa, coordenacaoDe(s));
+  const qualidade = Math.min(1, estimarProjeto(equipa, o.tipo, [], coordenacaoDe(s)).qualidade + bonusQualidade(s));
+  return { dias: Number.isFinite(meses) ? Math.ceil(meses * DIAS_POR_MES) : Infinity, qualidade };
+}
+
+function htmlConfigContrato(): string {
+  if (s.ofertas.length === 0)
+    return '<div class="vazio">Não há mais ofertas este mês. Chegam três novas no início de cada mês.</div>';
+  if (!s.ofertas.some((o) => o.id === ofertaEscolhida)) ofertaEscolhida = s.ofertas[0].id;
+  const o = s.ofertas.find((x) => x.id === ofertaEscolhida)!;
+  const equipa = equipaEscolhida();
+  const prev = preverContrato(o, equipa);
+  const atraso = prev.dias > o.prazoDias;
+  const pago = pagamentoDoContrato({ cliente: o.cliente, pagamento: o.pagamento, prazo: 0, atrasado: atraso }, prev.qualidade);
+  const ofertas = s.ofertas.map((x) => `<button class="oferta ${x.id === o.id ? 'ativo' : ''}" data-acao="oferta" data-oferta="${x.id}">
+      <span class="ic-tipo">${ICONE_TIPO[x.tipo]}</span>
+      <span class="cresce"><b>${esc(x.encomenda)}</b><small>${esc(x.cliente)} · ${(x.trabalho / 1000).toFixed(1).replace('.', ',')}k pontos</small></span>
+      <span class="vendas"><b>${euros(x.pagamento)}</b><small>${x.prazoDias} dias</small></span></button>`).join('');
+  return `<div class="nota">Trabalho por encomenda: paga no fim, conforme a qualidade. Se passar o prazo, o cliente paga só 60%.</div>
+    <div class="lista-ofertas">${ofertas}</div>
+    <div class="rotulo">Trabalho por área</div>
+    ${htmlDivisao(o.tipo)}
+    ${htmlEscolhaEquipa(equipa)}
+    <div class="previsao">
+      <div><small>Duração</small><b class="${atraso ? 'mau' : ''}">${equipa.length ? (Number.isFinite(prev.dias) ? `${prev.dias} d` : '—') : '—'}</b></div>
+      <div><small>Prazo</small><b>${o.prazoDias} d</b></div>
+      <div><small>Pagamento</small><b>${equipa.length ? euros(pago) : '—'}</b></div>
+    </div>
+    ${equipa.length && atraso ? `<div class="nota aviso">${ic('triangle-alert')} Com esta equipa não chegas a tempo.</div>` : ''}
+    <button data-acao="contrato" class="primario largo">${ic('briefcase')} Assinar contrato · ${o.trabalho.toLocaleString('pt-PT')} pontos</button>`;
+}
+
+function htmlMercado(): string {
+  const a = avaliarEmpresa(s);
+  const rk = rankingEmpresas(s);
+  const lugar = rk.findIndex((l) => l.jogador) + 1;
+  const eu = rk[lugar - 1];
+  const partes: [string, number, string][] = [
+    ['Caixa', a.caixa, 'p-caixa'], ['Produtos', a.produtos, 'p-produtos'], ['Projetos', a.projetos, 'p-projetos'],
+    ['Equipa', a.equipa, 'p-equipa'], ['Marca', a.marca, 'p-marca'], ['Escritório', a.ativos, 'p-ativos'],
+  ];
+  const variacao = eu.historico.length ? `<span class="var ${eu.variacao >= 0 ? 'sobe' : 'desce'}">${ic(eu.variacao >= 0 ? 'arrow-up-right' : 'arrow-down-right')}${percentagem(eu.variacao)}</span>` : '';
+  const ranking = rk.map((l, i) => `<div class="lugar ${l.jogador ? 'eu' : ''}">
+      <span class="pos p${i + 1}">${i + 1}</span>
+      <span class="cresce"><b>${esc(l.nome)}</b><small>${l.jogador ? 'A tua empresa' : `${TIPOS[l.tipo!].plural}`}</small></span>
+      ${sparkline(l.jogador ? [...l.historico, l.valor] : l.historico, 56, 20)}
+      <span class="valor"><b>${compacto(l.valor)}</b><small class="${l.variacao >= 0 ? 'sobe' : 'desce'}">${l.historico.length ? percentagem(l.variacao) : ''}</small></span>
+    </div>`).join('');
+  const rondas = LISTA_RONDAS.map((id) => {
+    const d = RONDAS[id];
+    const feita = s.rondas.includes(id);
+    const r = podeLevantar(s, id);
+    return `<div class="ronda ${feita ? 'feita' : r.ok ? 'pode' : ''}">
+      <span class="cresce"><b>${d.nome} · ${Math.round(d.parte * 100)}%</b><small>${d.descricao} Nível ${d.nivel}, avaliação de ${compacto(d.avaliacaoMinima)}.</small></span>
+      ${feita ? `<span class="estado bom">${ic('check')} Feita</span>`
+        : r.ok ? `<button class="mini primario" data-acao="ronda" data-ronda="${id}">Receber ${compacto(valorDaRonda(s, id))}</button>`
+          : `<span class="estado" title="${esc(r.msg ?? '')}">${ic('lock')} ${esc(r.msg ?? '')}</span>`}
+    </div>`;
+  }).join('');
+  return `<div class="cartao avaliacao">
+      <div class="linha"><span class="rotulo">Avaliação da empresa</span><span class="lugar-rk">${lugar}.º lugar</span></div>
+      <div class="valor-grande">${euros(a.total)}${variacao}</div>
+      ${sparkline([...eu.historico, a.total], 320, 46)}
+      <div class="barra-partes">${partes.filter((p) => p[1] > 0).map((p) => `<i class="${p[2]}" style="flex:${p[1]}" title="${p[0]} ${euros(p[1])}"></i>`).join('')}</div>
+      <div class="partes">${partes.map((p) => `<div><i class="${p[2]}"></i><span>${p[0]}</span><b class="${p[1] < 0 ? 'mau' : ''}">${compacto(p[1])}</b></div>`).join('')}</div>
+      ${s.participacao > 0 ? `<div class="nota">Os investidores têm ${Math.round(s.participacao * 100)}% da empresa: a tua parte vale <b>${euros(Math.round(a.total * (1 - s.participacao)))}</b>.</div>` : ''}
+    </div>
+    <div class="cartao"><h3>${ic('trophy')} Ranking de empresas <small>atualiza no fecho do mês</small></h3><div class="ranking">${ranking}</div></div>
+    <div class="cartao"><h3>${ic('handshake')} Investidores <small>${s.participacao ? `têm ${Math.round(s.participacao * 100)}%` : 'ainda nenhum'}</small></h3>
+      <div class="nota">Vende uma parte da empresa por dinheiro já. Em troca, os investidores ficam com essa parte do lucro de cada mês.</div>
+      ${rondas}</div>`;
 }
 
 function htmlEquipa(): string {
   const salarios = s.funcionarios.reduce((t, f) => t + f.salario, 0);
   const media = s.funcionarios.length ? s.funcionarios.reduce((t, f) => t + f.felicidade, 0) / s.funcionarios.length : 0;
   const opcoes = (f: Funcionario) => [`<option value="" ${f.projetoId === null ? 'selected' : ''}>Sem projeto</option>`,
-    ...s.projetos.map((p) => `<option value="${p.id}" ${f.projetoId === p.id ? 'selected' : ''}>📁 ${esc(p.nome)}</option>`)].join('');
+    ...s.projetos.map((p) => `<option value="${p.id}" ${f.projetoId === p.id ? 'selected' : ''}>${esc(p.nome)}</option>`)].join('');
   return `<div class="resumo">
       <div><small>Pessoas</small><b>${s.funcionarios.length}</b></div>
       <div><small>Salários</small><b>${euros(salarios)}</b></div>
       <div><small>Felicidade</small><b style="color:${COR_FEL(media)}">${s.funcionarios.length ? Math.round(media) : '—'}</b></div>
     </div>
-    ${s.funcionarios.length === 0 ? '<div class="vazio">Ainda não tens funcionários. Vê o separador 🤝 Contratar.</div>' : ''}
+    ${s.funcionarios.length === 0 ? '<div class="vazio">Ainda não tens funcionários. Vê o separador Contratar.</div>' : ''}
     ${s.funcionarios.map((f) => `<div class="cartao pessoa ${f.id === selecionado ? 'selecionado' : ''}" data-pessoa="${f.id}" title="Clica para ver no escritório">
       ${avatar(f.nome, especialidade(f))}
       <div class="cresce">
@@ -1206,7 +1386,7 @@ function htmlEquipa(): string {
 function htmlCandidatos(): string {
   const livres = s.secretarias.length - s.funcionarios.length;
   return `<div class="nota">Novos candidatos no início de cada mês. O salário depende da competência.</div>
-    ${livres <= 0 ? `<div class="nota aviso">⚠ Não há secretárias livres: quem contratares fica sem trabalhar até colocares mais uma (tecla 4).</div>` : ''}
+    ${livres <= 0 ? `<div class="nota aviso">${ic('triangle-alert')} Não há secretárias livres: quem contratares fica sem trabalhar até colocares mais uma (tecla 4).</div>` : ''}
     ${s.candidatos.length === 0 ? '<div class="vazio">Sem candidatos este mês.</div>' : ''}
     ${s.candidatos.map((c, i) => {
       const area = especialidadeDe(c.competencias);
@@ -1235,7 +1415,7 @@ function htmlProdutos(): string {
       <div><small>Receita total</small><b>${euros(total)}</b></div>
       <div><small>Produtos</small><b>${s.produtos.length}</b></div>
     </div>
-    <div class="cartao"><h3>🛒 Mercado livre</h3><div class="nota">Quanto venderia um produto novo de cada tipo.</div>${mercados}</div>
+    <div class="cartao"><h3>${ic('chart-column')} Mercado livre</h3><div class="nota">Quanto venderia um produto novo de cada tipo.</div>${mercados}</div>
     ${s.produtos.length === 0 ? '<div class="vazio">Nenhum produto lançado ainda.</div>' : ''}
     ${s.produtos.slice(-15).reverse().map((p) => `<div class="cartao produto">
       <span class="ic-tipo">${ICONE_TIPO[p.tipo]}</span>
@@ -1256,8 +1436,8 @@ function htmlNumeros(): string {
       <div><small>Receita total</small><b>${euros(total)}</b></div>
       <div><small>Salas</small><b>${totalSalas}</b></div>
     </div>
-    <div class="cartao"><h3>🏆 Conquistas <small>${tem.size} de ${CONQUISTAS.length}</small></h3>
-      <div class="mini-conquistas">${CONQUISTAS.map((c) => `<span class="${tem.has(c.id) ? 'feita' : ''}" title="${c.nome}: ${c.descricao}">${tem.has(c.id) ? c.icone : '🔒'}</span>`).join('')}</div></div>`;
+    <div class="cartao"><h3>${ic('trophy')} Conquistas <small>${tem.size} de ${CONQUISTAS.length}</small></h3>
+      <div class="mini-conquistas">${CONQUISTAS.map((c) => `<span class="${tem.has(c.id) ? 'feita' : ''}" title="${c.nome}: ${c.descricao}">${tem.has(c.id) ? c.icone : ic('lock')}</span>`).join('')}</div></div>`;
 }
 
 function htmlFicha(f: Funcionario): string {
@@ -1268,9 +1448,9 @@ function htmlFicha(f: Funcionario): string {
   const nota = alvo > 75 ? ` (decoração +${Math.round(alvo - 75)})` : alvo < 75 ? ' (sem secretária)' : '';
   return `<div class="cab">${avatar(f.nome, area, true)}
       <div class="cresce"><b>${esc(f.nome)}</b><small>Especialista em ${NOME_AREA[area].toLowerCase()} · ${euros(f.salario)}/mês</small></div>
-      <button class="mini" data-fechar title="Fechar (Esc)">✕</button></div>
+      <button class="mini icone-mini" data-fechar title="Fechar (Esc)">${ic('x')}</button></div>
     <div class="linha"><span class="estado ${classeEstado(f)}">${NOME_ESTADO[f.estado]}</span>
-      <span>${proj ? `📁 ${esc(proj.nome)}` : '<span class="aviso">Sem projeto</span>'}</span></div>
+      <span>${proj ? `${ic('folder-open')} ${esc(proj.nome)}` : '<span class="aviso">Sem projeto</span>'}</span></div>
     <div class="felicidade">
       <div class="linha"><span>${CARA_FEL(f.felicidade)} Felicidade</span><b style="color:${COR_FEL(f.felicidade)}">${Math.round(f.felicidade)}</b></div>
       <div class="barra"><div style="width:${Math.round(f.felicidade)}%;background:${COR_FEL(f.felicidade)}"></div></div>
@@ -1291,9 +1471,9 @@ function htmlFalencia(): string {
       <div><small>Conquistas</small><b>${s.conquistas.length}/${CONQUISTAS.length}</b></div>
     </div>
     <div class="lista-botoes">
-      <button data-fim="carregar" class="primario">📂 Carregar último jogo guardado</button>
-      <button data-fim="novo">✨ Novo jogo</button>
-      <button data-fim="menu">🏠 Menu principal</button>
+      <button data-fim="carregar" class="primario">${ic('folder-open')} Carregar último jogo guardado</button>
+      <button data-fim="novo">${ic('sparkles')} Novo jogo</button>
+      <button data-fim="menu">${ic('house')} Menu principal</button>
     </div></div>`;
 }
 
@@ -1311,7 +1491,11 @@ fim.addEventListener('click', (ev) => {
 
 // --- Avisos flutuantes e notícias ------------------------------------------
 
-const ICONE_AVISO: Partial<Record<string, string>> = { nivel: '⭐', missao: '🎯', lancamento: '🚀', desbloqueio: '🔓', falencia: '💥', erro: '⛔', info: 'ℹ️' };
+const ICONE_AVISO: Partial<Record<string, string>> = {
+  nivel: ic('star'), missao: ic('target'), lancamento: ic('rocket'), desbloqueio: ic('unlock'), falencia: ic('triangle-alert'),
+  erro: ic('circle-x'), info: ic('info'), conquista: ic('trophy'), evento: ic('sparkles'), aviso: ic('triangle-alert'),
+  contrato: ic('briefcase'), investimento: ic('handshake'),
+};
 
 function avisoFlutuante(texto: string, tipo: string, icone = ICONE_AVISO[tipo] ?? ''): void {
   const e = document.createElement('div');
@@ -1350,7 +1534,7 @@ function processarMensagensNovas(): void {
       if (saldo > 0) particulas.repuxo(centro, Math.min(40, 10 + Math.round(saldo / 600)), 'moeda');
       const [x, y] = paraEcra(centro.setY(1.8));
       numeroFlutuante(`${saldo >= 0 ? '+' : ''}${euros(saldo)}`, saldo >= 0 ? 'bom' : 'mau', x, y);
-      if (def.avisos) avisoFlutuante(`Fecho do mês: <b>${saldo >= 0 ? '+' : ''}${euros(saldo)}</b>`, saldo >= 0 ? 'mes-bom' : 'mes-mau', '💶');
+      if (def.avisos) avisoFlutuante(`Fecho do mês: <b>${saldo >= 0 ? '+' : ''}${euros(saldo)}</b>`, saldo >= 0 ? 'mes-bom' : 'mes-mau', ic('banknote'));
       if (saldo > 0) som.dinheiro();
       continue;
     }
@@ -1358,7 +1542,7 @@ function processarMensagensNovas(): void {
       const p = [...s.produtos].reverse().find((o) => o.lancadoEm === m.minuto);
       if (p) {
         celebracoes.lancamento({ produto: p, xp: xpDeLancamento(p.tipo, p.qualidade), icone: ICONE_TIPO[p.tipo] });
-        if (def.avisos && m.texto.includes('saturado')) avisoFlutuante(esc(m.texto.slice(m.texto.indexOf('O mercado'))), 'aviso', '📉');
+        if (def.avisos && m.texto.includes('saturado')) avisoFlutuante(esc(m.texto.slice(m.texto.indexOf('O mercado'))), 'aviso', ic('trending-down'));
         continue;
       }
     }
@@ -1370,19 +1554,23 @@ function processarMensagensNovas(): void {
     }
     if (t === 'missao') {
       som.missao();
-      if (def.avisos) avisoFlutuante(esc(m.texto.replace(/^🎯 /, '')), 'missao', '🎯');
+      if (def.avisos) avisoFlutuante(esc(semEmoji(m.texto)), 'missao');
       painelMissoes.raiz.classList.remove('cumpriu');
       void painelMissoes.raiz.offsetWidth;
       painelMissoes.raiz.classList.add('cumpriu');
       continue;
     }
+    if (t === 'contrato' && m.texto.startsWith('✅')) {
+      particulas.repuxo(centroDoEscritorio(), 18, 'moeda');
+      for (const f of s.funcionarios) if (f.projetoId === null) bonecos.get(f.id)?.festejar(3);
+    }
     const efeitos: Partial<Record<string, () => void>> = {
       lancamento: som.lancamento, conquista: som.conquista, desbloqueio: som.evento, evento: som.evento,
-      aviso: som.aviso, falencia: som.falencia,
+      aviso: som.aviso, falencia: som.falencia, contrato: som.dinheiro, investimento: som.dinheiro,
     };
     if (efeitos[t]) {
       efeitos[t]!();
-      if (def.avisos || t === 'falencia') avisoFlutuante(esc(m.texto), t);
+      if (def.avisos || t === 'falencia') avisoFlutuante(esc(semEmoji(m.texto)), t);
     }
   }
 }
@@ -1405,6 +1593,9 @@ function texto(sel: string, valor: string, raiz: HTMLElement = topo): void {
   const e = raiz.querySelector(sel) as HTMLElement;
   if (e.textContent !== valor) e.textContent = valor;
 }
+function html(sel: string, valor: string, raiz: HTMLElement = topo): void {
+  definir(raiz.querySelector(sel) as HTMLElement, valor);
+}
 
 /** Barra de cima: atualizada a cada imagem (o dinheiro conta até ao valor certo). */
 function atualizarTopo(dt: number): void {
@@ -1419,7 +1610,7 @@ function atualizarTopo(dt: number): void {
   const [data, hora] = textoData(s.minuto).split(' — ');
   texto('.data', data);
   texto('.hora', hora);
-  texto('.ceu', ambiente.noite > 0.5 && def.cicloDia ? '🌙' : '☀️');
+  html('.ceu', ic(ambiente.noite > 0.5 && def.cicloDia ? 'moon' : 'sun'));
 
   const emblema = topo.querySelector('.nivel-emblema') as HTMLElement;
   texto('.nivel-emblema .n', String(nivelDaEmpresa(s)));
@@ -1459,10 +1650,14 @@ function atualizarUI(): void {
   const saldo = vendas - salarios - rendaDe(s);
   texto('.saldo .valor', `${saldo >= 0 ? '+' : ''}${euros(saldo)}/mês`);
   topo.querySelector('.saldo')!.classList.toggle('negativo', saldo < 0);
+  html('.saldo .seta', ic(saldo >= 0 ? 'trending-up' : 'trending-down'));
+  const lugar = rankingEmpresas(s).findIndex((l) => l.jogador) + 1;
+  texto('.avaliacao-topo .valor', compacto(avaliarEmpresa(s).total));
+  texto('.avaliacao-topo .lugar', `${lugar}.º`);
   texto('.equipa', String(s.funcionarios.length));
   const media = s.funcionarios.length ? s.funcionarios.reduce((t, f) => t + f.felicidade, 0) / s.funcionarios.length : 0;
   texto('.felicidade', s.funcionarios.length ? String(Math.round(media)) : '—');
-  texto('.cara', s.funcionarios.length ? CARA_FEL(media) : '😊');
+  html('.cara', s.funcionarios.length ? CARA_FEL(media) : ic('smile'));
   texto('.guardado', textoGuardado);
   topo.querySelectorAll<HTMLButtonElement>('[data-vel]').forEach((b) => b.classList.toggle('ativo', Number(b.dataset.vel) === velocidade));
 
@@ -1474,7 +1669,7 @@ function atualizarUI(): void {
     b.classList.toggle('caro', OBJETOS[t].custo > s.dinheiro);
   });
   const fer = FERRAMENTAS.find((f) => f.id === ferramenta)!;
-  definir(dica, textoArrasto || (ferramenta === 'selecionar' ? '' : `${fer.icone} ${fer.dica}`));
+  definir(dica, textoArrasto || (ferramenta === 'selecionar' ? '' : `${ic(fer.icone)} <span>${fer.dica}</span>`));
   dica.classList.toggle('vazia', !textoArrasto && ferramenta === 'selecionar');
 
   // Separadores: conteúdo só do que está aberto; os números pequenos sempre
@@ -1487,6 +1682,7 @@ function atualizarUI(): void {
     equipa: problemas ? String(problemas) : '',
     contratar: s.candidatos.length ? String(s.candidatos.length) : '',
     produtos: '',
+    mercado: String(LISTA_RONDAS.filter((id) => podeLevantar(s, id).ok).length || ''),
     numeros: '',
   };
   lateral.querySelectorAll<HTMLButtonElement>('[data-sep]').forEach((b) => {
@@ -1499,9 +1695,11 @@ function atualizarUI(): void {
     if (separador === 'projetos') {
       definir(document.getElementById('lista-projetos')!, htmlListaProjetos());
       definir(document.getElementById('config-projeto')!, htmlConfigProjeto());
+      lateral.querySelector('.novo-projeto')!.classList.toggle('modo-contrato', modoNovo === 'contrato');
     } else if (separador === 'equipa') definir(document.getElementById('p-equipa')!, htmlEquipa());
     else if (separador === 'contratar') definir(document.getElementById('p-candidatos')!, htmlCandidatos());
     else if (separador === 'produtos') definir(document.getElementById('p-produtos')!, htmlProdutos());
+    else if (separador === 'mercado') definir(document.getElementById('p-mercado')!, htmlMercado());
     else {
       definir(document.getElementById('p-numeros')!, htmlNumeros());
       const chave = `${s.historico.length}|${s.historico[s.historico.length - 1]?.dinheiro}|${innerWidth}`;
@@ -1513,9 +1711,12 @@ function atualizarUI(): void {
   }
   if (separador !== 'numeros') graficoDesenhado = '';
 
-  const cor: Record<string, string> = { lancamento: 'bom', conquista: 'ouro', evento: 'info', aviso: 'mau', falencia: 'mau', desbloqueio: 'roxo', mes: 'mes' };
+  const cor: Record<string, string> = {
+    lancamento: 'bom', conquista: 'ouro', evento: 'info', aviso: 'mau', falencia: 'mau', desbloqueio: 'roxo', mes: 'mes',
+    contrato: 'bom', investimento: 'ouro', rival: 'rival', missao: 'bom', nivel: 'ouro',
+  };
   definir(caixaNoticias.querySelector('.lista') as HTMLElement, s.mensagens.slice(-25).reverse().map(
-    (m) => `<div class="n-${cor[m.tipo ?? 'info'] ?? 'normal'}"><span class="hora">${textoData(m.minuto).split(' — ')[0]}</span>${esc(m.texto)}</div>`,
+    (m) => `<div class="n-${cor[m.tipo ?? 'info'] ?? 'normal'}"><span class="hora">${textoData(m.minuto).split(' — ')[0]}</span>${esc(semEmoji(m.texto))}</div>`,
   ).join(''));
 
   const fs = s.funcionarios.find((f) => f.id === selecionado);
@@ -1592,7 +1793,7 @@ function guardar(): void {
     textoGuardado = `Guardado ${textoData(s.minuto).split(' — ')[0]}`;
     mensagem(s, 'Jogo guardado.');
     marcarMensagensVistas();
-    avisoFlutuante('Jogo guardado neste browser.', 'info', '💾');
+    avisoFlutuante('Jogo guardado.', 'info', ic('save'));
   } else erro('Não foi possível guardar (o armazenamento do browser está cheio ou bloqueado).');
   atualizarUI();
 }
@@ -1603,7 +1804,7 @@ function carregar(): void {
   if (!melhor) return erro(e || 'Não há nenhum jogo guardado.');
   mensagem(melhor.estado, 'Jogo carregado: continuas onde ficaste.');
   comecarJogo(melhor.estado);
-  avisoFlutuante(`Bem-vindo de volta à <b>${esc(s.nome)}</b>!`, 'info', '📂');
+  avisoFlutuante(`Bem-vindo de volta à <b>${esc(s.nome)}</b>!`, 'info', ic('folder-open'));
 }
 
 /** Autosave no fecho de cada mês (não guarda uma falência por cima do último jogo bom). */
@@ -1628,7 +1829,7 @@ const menus = new Menus({
     comecarJogo(novoJogo(Date.now() & 0xffff, LARGURA, ALTURA, { ...opcoes, missoes: true }));
     // Passa a ser o jogo mais recente: ao recarregar a página continua este, não o antigo.
     escreverLugar(LUGAR_AUTO, s);
-    avisoFlutuante(`Bem-vindo à <b>${esc(s.nome)}</b>! Segue as 🎯 missões à esquerda: começa por colocar secretárias (tecla 4) e contratar no separador 🤝 Contratar.`, 'info', '👋');
+    avisoFlutuante(`Bem-vindo à <b>${esc(s.nome)}</b>! Segue as missões à esquerda: começa por colocar secretárias (tecla 4) e contratar no separador Contratar.`, 'info', ic('sparkles'));
   },
   voltarAoJogo: () => {
     menus.mostrar(null);

@@ -1,8 +1,14 @@
 // Interface da progressão: painel de missões (sempre à vista) e janela das melhorias. Só DOM.
 import {
   descricaoMissao, euros, LISTA_MELHORIAS, MELHORIAS, nivelDaEmpresa, pontosMelhoria, progressoMissao,
-  progressoNivel, temMelhoria, TEXTO_MISSAO, type Estado, type Missao,
+  progressoNivel, temMelhoria, TEXTO_MISSAO, type Estado, type Missao, type TipoMissao,
 } from './sim.ts';
+import { ic, type NomeIcone } from './icones.ts';
+
+const ICONE_MISSAO: Partial<Record<TipoMissao, NomeIcone>> = {
+  contratar: 'user-plus', sala: 'brick-wall', lancar: 'rocket', qualidade: 'gem', faturar: 'banknote', tipo: 'package',
+  decorar: 'sprout', caixa: 'piggy-bank', feliz: 'smile', equipa: 'users',
+};
 
 function el(html: string): HTMLElement {
   const t = document.createElement('template');
@@ -24,13 +30,13 @@ export class PainelMissoes {
 
   constructor() {
     this.raiz = el(`<div id="missoes" class="ui vidro hud">
-      <div class="cab"><b>🎯 Missões</b><small class="feitas"></small><button class="recolher" title="Recolher">–</button></div>
+      <div class="cab"><b>${ic('target')} Missões</b><small class="feitas"></small><button class="recolher" title="Recolher">${ic('minus')}</button></div>
       <div class="lista"></div>
     </div>`);
     this.raiz.querySelector('.recolher')!.addEventListener('click', () => {
       this.recolhido = !this.recolhido;
       this.raiz.classList.toggle('recolhido', this.recolhido);
-      this.raiz.querySelector('.recolher')!.textContent = this.recolhido ? '+' : '–';
+      this.raiz.querySelector('.recolher')!.innerHTML = ic(this.recolhido ? 'plus' : 'minus');
     });
   }
 
@@ -47,7 +53,7 @@ export class PainelMissoes {
     lista.innerHTML = linhas.length ? linhas.map(({ m, p }) => {
       const pct = Math.min(100, (p.atual / Math.max(1, p.alvo)) * 100);
       return `<div class="missao${this.conhecidas.has(m.id) ? '' : ' nova'}${pct >= 75 ? ' quase' : ''}">
-        <span class="ic">${TEXTO_MISSAO[m.tipo].icone}</span>
+        <span class="ic">${ICONE_MISSAO[m.tipo] ? ic(ICONE_MISSAO[m.tipo]!) : TEXTO_MISSAO[m.tipo].icone}</span>
         <div class="corpo">
           <span class="txt">${descricaoMissao(m)}</span>
           <div class="barra"><i style="width:${pct.toFixed(1)}%"></i></div>

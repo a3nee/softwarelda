@@ -481,6 +481,9 @@ verificar(cenarioSala(false) === 'semAcesso', 'sem porta fica sem acesso');
   verificar(s.ofertas.length === 3 && s.ofertas.every((o) => o.trabalho > 0 && o.pagamento > 0 && o.prazoDias >= 15),
     'há 3 ofertas de contrato por mês');
   verificar(JSON.stringify(s.ofertas) === JSON.stringify(outro.ofertas), 'as ofertas são determinísticas');
+  verificar(new Set(s.ofertas.map((o) => o.encomenda)).size === 3 && new Set(s.ofertas.map((o) => o.cliente)).size === 3,
+    'as ofertas do mês são todas diferentes');
+  verificar(new Set(s.rivais.map((r) => r.tipo)).size === 4, 'os concorrentes têm especialidades variadas');
 
   s.produtos.push({ nome: 'X', tipo: 'utilitario', funcionalidades: [], qualidade: 0.8, vendasMes: 8000, receitaTotal: 0, lancadoEm: 0 });
   verificar(avaliarEmpresa(s).produtos === Math.round(vendasFuturas(8000, TIPOS.utilitario.queda) / 100) * 100,

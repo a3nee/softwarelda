@@ -2093,7 +2093,8 @@ function criarRivais(semente: number): Rival[] {
     return {
       id: i + 1,
       nome: nomes[i],
-      tipo: LISTA_TIPOS[Math.floor(h(`${semente}|tipo|${i}`) * LISTA_TIPOS.length)],
+      // Especialidades variadas: roda os 4 tipos a partir de um ponto escolhido pela semente.
+      tipo: LISTA_TIPOS[(i + Math.floor(h(`${semente}|tipo`) * LISTA_TIPOS.length)) % LISTA_TIPOS.length],
       valor: Math.round((v * (0.85 + 0.3 * x)) / 1000) * 1000,
       tendencia: (0.034 - 0.004 * i) * (0.6 + 0.8 * h(`${semente}|tendencia|${i}`)), // as pequenas crescem mais depressa
       produtos: 0,
@@ -2145,12 +2146,13 @@ export interface LugarRanking {
 export function rankingEmpresas(s: Estado): LugarRanking[] {
   const valor = avaliarEmpresa(s).total;
   const hist = s.historico.filter((r) => r.valor !== undefined).map((r) => r.valor!).slice(-HISTORICO_RIVAL);
-  const antes = hist.length ? hist[hist.length - 1] : valor;
+  // Como nos concorrentes: a variação é a do último fecho de mês.
+  const variacao = hist.length > 1 && hist[hist.length - 2] ? hist[hist.length - 1] / hist[hist.length - 2] - 1 : 0;
   const lista: LugarRanking[] = s.rivais.map((r) => {
     const a = r.historico.length > 1 ? r.historico[r.historico.length - 2] : r.valor;
     return { nome: r.nome, valor: r.valor, variacao: a ? r.valor / a - 1 : 0, jogador: false, tipo: r.tipo, historico: r.historico };
   });
-  lista.push({ nome: s.nome, valor, variacao: antes ? valor / antes - 1 : 0, jogador: true, tipo: null, historico: hist });
+  lista.push({ nome: s.nome, valor, variacao, jogador: true, tipo: null, historico: hist });
   return lista.sort((a, b) => b.valor - a.valor || (a.jogador ? -1 : 1));
 }
 
@@ -2297,14 +2299,19 @@ const ENCOMENDAS: { nome: string; tipo: TipoSoftware; trabalho: number }[] = [
 function gerarOfertas(s: Estado): void {
   const mes = mesDeJogo(s);
   const escala = 1 + Math.min(mes, 36) * 0.04;
+  // Encomendas e clientes diferentes entre si, numa ordem que muda todos os meses.
+  const ordem = <T>(lista: T[], k: string) => [...lista].sort((a, b) =>
+    h(`${s.sementeMundo}|${mes}|${k}|${JSON.stringify(a)}`) - h(`${s.sementeMundo}|${mes}|${k}|${JSON.stringify(b)}`));
+  const encomendas = ordem(ENCOMENDAS, 'enc');
+  const clientes = ordem(CLIENTES, 'cli');
   s.ofertas = [];
   for (let i = 0; i < CONTRATOS.ofertas; i++) {
     const base = `${s.sementeMundo}|oferta|${mes}|${i}`;
-    const e = ENCOMENDAS[Math.floor(h(base + '|enc') * ENCOMENDAS.length)];
+    const e = encomendas[i];
     const trabalho = Math.round((e.trabalho * escala * (0.85 + 0.3 * h(base + '|trab'))) / 500) * 500;
     s.ofertas.push({
       id: mes * 10 + i + 1,
-      cliente: CLIENTES[Math.floor(h(base + '|cli') * CLIENTES.length)],
+      cliente: clientes[i],
       encomenda: e.nome,
       tipo: e.tipo,
       trabalho,

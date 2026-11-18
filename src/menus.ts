@@ -1,6 +1,7 @@
 // Menus em ecrã inteiro: principal, nova empresa, pausa, definições, como jogar e conquistas.
 import { CONQUISTAS, DIFICULDADES, DECORACAO, ECON, euros, OBJETOS, LISTA_OBJETOS, type Dificuldade, type OpcoesJogo } from './sim.ts';
 import type { Definicoes, Qualidade } from './definicoes.ts';
+import { ic } from './icones.ts';
 
 export type Ecra = 'principal' | 'novo' | 'pausa' | 'definicoes' | 'ajuda' | 'conquistas';
 
@@ -24,8 +25,7 @@ export interface AcoesMenu {
   clique(): void;
 }
 
-const ICONE_DIF: Record<Dificuldade, string> = { facil: '🌱', normal: '⚖️', dificil: '🔥' };
-export const ICONE_OBJETO = { planta: '🪴', sofa: '🛋️', cafe: '☕', matraquilhos: '⚽' } as const;
+const ICONE_DIF: Record<Dificuldade, string> = { facil: ic('sprout'), normal: ic('target'), dificil: ic('flame') };
 
 function esc(t: string): string {
   return t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
@@ -126,13 +126,13 @@ export class Menus {
         <p>Do primeiro utilitário ao grande estúdio de jogos: constrói a maior empresa de software do país.</p>
       </div>
       <div class="opcoes">
-        ${save ? botao('continuar', '▶', 'Continuar', `${esc(save.nome)} · ${save.data} · ${save.dinheiro}`, true) : ''}
-        ${botao('novo', '✨', 'Novo jogo', 'Funda a tua empresa', !save)}
-        ${botao('ajuda', '📖', 'Como jogar', 'Regras, dicas e atalhos')}
-        ${botao('conquistas', '🏆', 'Conquistas', `${n} de ${CONQUISTAS.length} desbloqueadas`)}
-        ${botao('definicoes', '⚙️', 'Definições', 'Gráficos, som e avisos')}
+        ${save ? botao('continuar', ic('play'), 'Continuar', `${esc(save.nome)} · ${save.data} · ${save.dinheiro}`, true) : ''}
+        ${botao('novo', ic('sparkles'), 'Novo jogo', 'Funda a tua empresa', !save)}
+        ${botao('ajuda', ic('info'), 'Como jogar', 'Regras, dicas e atalhos')}
+        ${botao('conquistas', ic('trophy'), 'Conquistas', `${n} de ${CONQUISTAS.length} desbloqueadas`)}
+        ${botao('definicoes', ic('settings'), 'Definições', 'Gráficos, som e avisos')}
       </div>
-      <div class="rodape">Software Lda. v0.3 · Three.js</div>
+      <div class="rodape">Software Lda. v0.4</div>
     </div>`;
   }
 
@@ -142,27 +142,27 @@ export class Menus {
         <span class="ic">${ICONE_DIF[d]}</span><b>${DIFICULDADES[d].nome}</b><small>${DIFICULDADES[d].descricao}</small>
       </button>`).join('');
     return `<div class="janela">
-      <h2>✨ Nova empresa</h2>
+      <h2>Nova empresa</h2>
       <label class="campo"><span>Nome da empresa</span><input id="m-nome" type="text" maxlength="30" placeholder="Software Lda." autocomplete="off"></label>
       <div class="rotulo">Dificuldade</div>
       <div class="dificuldades">${difs}</div>
       <label class="interruptor"><input type="checkbox" id="m-eventos" checked><i></i>
         <span><b>Eventos aleatórios</b><small>Notícias, avarias, prémios e investidores no fecho do mês.</small></span></label>
-      <div class="linha-botoes"><button data-m="voltar">Voltar</button><button data-m="fundar" class="primario">🚀 Fundar empresa</button></div>
+      <div class="linha-botoes"><button data-m="voltar">Voltar</button><button data-m="fundar" class="primario">${ic('rocket')} Fundar empresa</button></div>
     </div>`;
   }
 
   private pausa(): string {
     return `<div class="janela estreita">
-      <h2>⏸ Pausa</h2>
+      <h2>Pausa</h2>
       <div class="lista-botoes">
-        <button data-m="jogo" class="primario">▶ Continuar</button>
-        <button data-m="guardar">💾 Guardar jogo</button>
-        <button data-m="carregar">📂 Carregar último jogo guardado</button>
-        <button data-m="ajuda">📖 Como jogar</button>
-        <button data-m="conquistas">🏆 Conquistas</button>
-        <button data-m="definicoes">⚙️ Definições</button>
-        <button data-m="sair" class="perigo">🚪 Sair para o menu principal</button>
+        <button data-m="jogo" class="primario">${ic('play')} Continuar</button>
+        <button data-m="guardar">${ic('save')} Guardar jogo</button>
+        <button data-m="carregar">${ic('folder-open')} Carregar último jogo guardado</button>
+        <button data-m="ajuda">${ic('info')} Como jogar</button>
+        <button data-m="conquistas">${ic('trophy')} Conquistas</button>
+        <button data-m="definicoes">${ic('settings')} Definições</button>
+        <button data-m="sair" class="perigo">${ic('door-open')} Sair para o menu principal</button>
       </div>
       <p class="nota">Ao sair, o jogo fica guardado automaticamente.</p>
     </div>`;
@@ -174,7 +174,7 @@ export class Menus {
       <input type="checkbox" data-def="${k}" ${d[k] ? 'checked' : ''}><i></i><span><b>${t}</b><small>${sub}</small></span></label>`;
     const q = (v: Qualidade, t: string) => `<button data-qual="${v}" class="${d.qualidade === v ? 'ativo' : ''}">${t}</button>`;
     return `<div class="janela">
-      <h2>⚙️ Definições</h2>
+      <h2>Definições</h2>
       <div class="grupo-def">
         <div class="rotulo">Gráficos</div>
         <div class="segmentos">${q('baixa', 'Baixa')}${q('media', 'Média')}${q('alta', 'Alta')}</div>
@@ -193,20 +193,24 @@ export class Menus {
   }
 
   private ajuda(): string {
-    const cartao = (ic: string, t: string, texto: string) => `<div class="cartao-ajuda"><div class="ic">${ic}</div><div><h3>${t}</h3><p>${texto}</p></div></div>`;
-    const objetos = LISTA_OBJETOS.map((o) => `${ICONE_OBJETO[o]} ${OBJETOS[o].nome} (+${OBJETOS[o].felicidade})`).join(', ');
+    const cartao = (icone: string, t: string, texto: string) => `<div class="cartao-ajuda"><div class="ic">${icone}</div><div><h3>${t}</h3><p>${texto}</p></div></div>`;
+    const objetos = LISTA_OBJETOS.map((o) => `${OBJETOS[o].nome} (+${OBJETOS[o].felicidade})`).join(', ');
     return `<div class="janela larga">
-      <h2>📖 Como jogar</h2>
+      <h2>Como jogar</h2>
       <div class="grelha-ajuda">
-        ${cartao('🏗️', 'Constrói', `Coloca <b>secretárias</b> (${euros(ECON.custoSecretaria)}): cada funcionário precisa de uma. Desenha <b>paredes</b> para fechar salas (o chão ganha cor) e abre-lhes <b>portas</b>, senão ninguém entra.`)}
-        ${cartao('🤝', 'Contrata', 'Os candidatos mudam todos os meses. Cada pessoa sabe de <b>programação</b>, <b>design</b> e <b>testes</b>, com uma especialidade forte. A cor da camisola diz qual: <span class="c-prog">azul</span>, <span class="c-des">rosa</span> ou <span class="c-test">verde</span>.')}
-        ${cartao('📁', 'Desenvolve', 'Escolhe o tipo de software, as funcionalidades e a equipa. Cada tipo pede áreas diferentes (um jogo precisa de muito design). Equipas grandes acabam mais depressa, mas cada pessoa rende menos.')}
-        ${cartao('📦', 'Vende', 'Um produto lançado vende todos os meses, cada vez menos. Vários produtos do mesmo tipo saturam o mercado. Lançar produtos desbloqueia tipos novos: editor de texto, antivírus e jogo.')}
-        ${cartao('😊', 'Felicidade', `O losango por cima da cabeça mostra a felicidade. Quem está feliz trabalha mais depressa. A decoração alegra quem trabalha na mesma sala: ${objetos}. Objetos repetidos valem menos; no máximo +${DECORACAO.bonusMaximo}.`)}
-        ${cartao('🎯', 'Missões e níveis', 'Cumpre as missões à esquerda para ganhar experiência (e dinheiro a partir do nível 4). Lançamentos com boas críticas, conquistas e meses seguidos com lucro 🔥 também dão experiência. Cada nível dá um ponto de melhoria: abre-as com <kbd>M</kbd> ou no emblema ao lado do nome.')}
-        ${cartao('💶', 'Dinheiro', `Salários e renda (${euros(ECON.rendaMensal)}) pagam-se no fecho do mês. Abaixo de ${euros(ECON.limiteFalencia)}, a empresa vai à falência. Há autosave no fecho de cada mês.`)}
+        ${cartao(ic('brick-wall'), 'Constrói', `Coloca <b>secretárias</b> (${euros(ECON.custoSecretaria)}): cada funcionário precisa de uma. Desenha <b>paredes</b> para fechar salas (o chão ganha cor) e abre-lhes <b>portas</b>, senão ninguém entra.`)}
+        ${cartao(ic('user-plus'), 'Contrata', 'Os candidatos mudam todos os meses. Cada pessoa sabe de <b>programação</b>, <b>design</b> e <b>testes</b>, com uma especialidade forte. A cor da camisola diz qual: <span class="c-prog">azul</span>, <span class="c-des">rosa</span> ou <span class="c-test">verde</span>.')}
+        ${cartao(ic('folder-kanban'), 'Desenvolve', 'Escolhe o tipo de software, as funcionalidades e a equipa. Cada tipo pede áreas diferentes (um jogo precisa de muito design). Equipas grandes acabam mais depressa, mas cada pessoa rende menos.')}
+        ${cartao(ic('package'), 'Vende', 'Um produto lançado vende todos os meses, cada vez menos. Vários produtos do mesmo tipo saturam o mercado. Lançar produtos desbloqueia tipos novos: editor de texto, antivírus e jogo.')}
+        ${cartao(ic('smile'), 'Felicidade', `O losango por cima da cabeça mostra a felicidade. Quem está feliz trabalha mais depressa. A decoração alegra quem trabalha na mesma sala: ${objetos}. Objetos repetidos valem menos; no máximo +${DECORACAO.bonusMaximo}.`)}
+        ${cartao(ic('target'), 'Missões e níveis', 'Cumpre as missões à esquerda para ganhar experiência (e dinheiro a partir do nível 4). Lançamentos com boas críticas, conquistas e meses seguidos com lucro também dão experiência. Cada nível dá um ponto de melhoria: abre-as com <kbd>M</kbd> ou no emblema ao lado do nome.')}
+        ${cartao(ic('wallet'), 'Dinheiro', `Salários e renda (${euros(ECON.rendaMensal)}) pagam-se no fecho do mês. Abaixo de ${euros(ECON.limiteFalencia)}, a empresa vai à falência. Há autosave no fecho de cada mês.`)}
+        ${cartao(ic('briefcase'), 'Contratos de clientes', 'No novo projeto, escolhe <b>Contrato</b>: clientes pagam por trabalho por encomenda, com prazo. Paga no fim, conforme a qualidade; atrasado, só 60%. Bom para ter dinheiro certo no início.')}
+        ${cartao(ic('megaphone'), 'Marketing', 'Durante o desenvolvimento, faz campanhas (redes sociais, imprensa, feira) para criar <b>expectativa</b>: as vendas do lançamento sobem nessa percentagem. Cada campanha soma menos quando já há muita.')}
+        ${cartao(ic('building-2'), 'Mercado e avaliação', 'A empresa é avaliada pela caixa, pelas vendas futuras, projetos, equipa, marca e escritório. No separador <b>Mercado</b> vês o ranking contra 6 concorrentes, que crescem e lançam produtos todos os meses.')}
+        ${cartao(ic('handshake'), 'Investidores', 'Com nível e avaliação suficientes, vende uma parte da empresa (ronda semente, série A, série B) por dinheiro já. Em troca, os investidores ficam com essa parte do lucro de cada mês.')}
       </div>
-      <h3 class="titulo-atalhos">⌨️ Atalhos</h3>
+      <h3 class="titulo-atalhos">Atalhos</h3>
       <div class="atalhos">
         <span><kbd>1</kbd>–<kbd>6</kbd> ferramentas</span><span><kbd>Espaço</kbd> pausa</span><span><kbd>Esc</kbd> menu / cancelar</span>
         <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> mover a câmara</span><span><kbd>Q</kbd><kbd>E</kbd> rodar</span>
@@ -219,9 +223,9 @@ export class Menus {
   private ecraConquistas(): string {
     const tem = new Set(this.acoes.conquistas());
     return `<div class="janela larga">
-      <h2>🏆 Conquistas <small>${tem.size} de ${CONQUISTAS.length}</small></h2>
+      <h2>Conquistas <small>${tem.size} de ${CONQUISTAS.length}</small></h2>
       <div class="grelha-conquistas">${CONQUISTAS.map((c) => `
-        <div class="conquista ${tem.has(c.id) ? 'feita' : ''}"><div class="ic">${tem.has(c.id) ? c.icone : '🔒'}</div>
+        <div class="conquista ${tem.has(c.id) ? 'feita' : ''}"><div class="ic">${tem.has(c.id) ? c.icone : ic('lock')}</div>
           <div><b>${c.nome}</b><small>${c.descricao}</small></div></div>`).join('')}
       </div>
       <div class="linha-botoes"><button data-m="voltar" class="primario">Voltar</button></div>
