@@ -8,8 +8,10 @@ import {
   iniciarProjeto, lerAresta, LISTA_OBJETOS, LISTA_TIPOS, membrosDe, mensagem, mesDeJogo, mesesRestantes, MIN_POR_DIA, MIN_POR_MES,
   minutoDoDia, NADA, NOME_AREA, NOME_ESTADO, novoJogo, OBJETOS, objetoEm, PORTA, qualidadeDoProjeto, removerObjeto,
   removerSecretaria, secretariaEm, segmento, semDependentes, textoData, tipoDisponivel, TIPOS, totalDaArea,
-  trabalhoDoProjeto, vendasIniciais,
-  type Area, type Aresta, type Competencias, type Estado, type Funcionario, type Mensagem, type Resultado,
+  trabalhoDoProjeto, vendasIniciais, areaDeTrabalho, bonusQualidade, comprarMelhoria, coordenacaoDe, HORA_FIM,
+  HORA_INICIO, MELHORIAS, nivelDaEmpresa, pontosMelhoria, progressoNivel, rendaDe, serieDeLucro, temMelhoria,
+  xpDeLancamento,
+  type Area, type IdMelhoria, type Aresta, type Competencias, type Estado, type Funcionario, type Mensagem, type Resultado,
   type TipoObjeto, type TipoSoftware,
 } from './sim.ts';
 import {
@@ -21,6 +23,10 @@ import { guardarDefinicoes, lerDefinicoes, pixelRatio, type Definicoes } from '.
 import { configurarSom, som } from './som.ts';
 import { desenharGrafico } from './grafico.ts';
 import { ICONE_OBJETO, Menus } from './menus.ts';
+import { PosFx } from './posfx.ts';
+import { Particulas } from './particulas.ts';
+import { Celebracoes, numeroFlutuante } from './celebracoes.ts';
+import { htmlMelhorias, PainelMissoes } from './progresso.ts';
 
 // ---------------------------------------------------------------------------
 // Jogos guardados (localStorage): um lugar manual e um autosave no fecho de cada mês
@@ -154,6 +160,8 @@ function vistaDeMenu(): void {
 
 const ambiente = new Ambiente(cena, LARGURA, ALTURA, s.entrada);
 const confetes = new Confetes(cena);
+const particulas = new Particulas(cena);
+const posfx = new PosFx(renderer, cena, camara);
 
 // Chão: uma instância por célula, para se poder colorir cada uma.
 const geoCelula = new THREE.PlaneGeometry(0.98, 0.98).rotateX(-Math.PI / 2);
@@ -647,6 +655,10 @@ addEventListener('keydown', (ev) => {
     guardar();
     return;
   }
+  if (ev.key.toLowerCase() === 'm' && !ev.ctrlKey && !ev.metaKey) {
+    abrirMelhorias();
+    return;
+  }
   const f = FERRAMENTAS.find((o) => o.tecla === ev.key);
   if (f) escolherFerramenta(f.id);
   if (ev.key === ' ') {
@@ -755,10 +767,17 @@ function classeEstado(f: Funcionario): string {
 
 const topo = el(`<div id="topo" class="ui vidro hud">
   <div class="marca"><span class="logo">SL</span><span class="empresa"></span></div>
+  <button class="nivel-emblema" data-jogo="melhorias" title="Nível da empresa e melhorias (M)">
+    <svg viewBox="0 0 40 40"><defs><linearGradient id="gradNivel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#22d3ee"/><stop offset="0.55" stop-color="#8b5cf6"/><stop offset="1" stop-color="#f472b6"/>
+    </linearGradient></defs><circle class="fundo" cx="20" cy="20" r="17"/><circle class="arco" cx="20" cy="20" r="17"/></svg>
+    <b class="n">1</b><span class="pontos"></span>
+  </button>
   <div class="chip dinheiro" title="Dinheiro em caixa"><span class="ic">💶</span><b class="valor"></b><span class="delta"></span></div>
   <div class="chip saldo" title="Previsão para o próximo fecho do mês: vendas − salários − renda"><span class="ic">📈</span><span class="valor"></span></div>
   <div class="chip" title="Funcionários"><span class="ic">👥</span><span class="equipa"></span></div>
   <div class="chip" title="Felicidade média"><span class="ic cara">😊</span><span class="felicidade"></span></div>
+  <div class="chip serie" title="Meses seguidos com lucro: cada um dá mais experiência"><span class="ic">🔥</span><span class="valor"></span></div>
   <div class="chip relogio"><span class="ic ceu">☀️</span><span class="data"></span><b class="hora"></b></div>
   <div class="velocidades">
     <button data-vel="0" title="Pausa (Espaço)">⏸</button><button data-vel="1" title="Normal">▶</button>
@@ -778,6 +797,7 @@ topo.addEventListener('click', (ev) => {
   if (b.dataset.vel) velocidade = Number(b.dataset.vel);
   else if (b.dataset.jogo === 'guardar') guardar();
   else if (b.dataset.jogo === 'menu') abrirPausa();
+  else if (b.dataset.jogo === 'melhorias') abrirMelhorias();
   atualizarUI();
 });
 
@@ -847,6 +867,81 @@ const caixaNoticias = el(`<div id="noticias" class="ui vidro hud"><div class="ca
 const caixaAvisos = el(`<div id="avisos" class="ui"></div>`);
 const ficha = el(`<div id="ficha" class="ui vidro hud"></div>`);
 const fim = el(`<div id="fim" class="ui"></div>`);
+const painelMissoes = new PainelMissoes();
+document.body.append(painelMissoes.raiz);
+
+// Janelas que param o jogo (críticas, melhorias) sem serem menus.
+let pausasModais = 0;
+const celebracoes = new Celebracoes(() => pausasModais++, () => {
+  pausasModais = Math.max(0, pausasModais - 1);
+});
+
+let janelaMelhorias: HTMLElement | null = null;
+function abrirMelhorias(): void {
+  if (montra || janelaMelhorias || menus.ecra || celebracoes.aberta) return;
+  som.clique();
+  pausasModais++;
+  const j = el(`<div class="modal" id="j-melhorias">${htmlMelhorias(s)}</div>`);
+  janelaMelhorias = j;
+  const tecla = (ev: KeyboardEvent) => {
+    if (ev.key !== 'Escape' && ev.key.toLowerCase() !== 'm') return;
+    ev.stopPropagation();
+    ev.preventDefault();
+    fechar();
+  };
+  const fechar = () => {
+    som.clique();
+    j.remove();
+    janelaMelhorias = null;
+    pausasModais = Math.max(0, pausasModais - 1);
+    removeEventListener('keydown', tecla, true);
+  };
+  addEventListener('keydown', tecla, true);
+  j.addEventListener('click', (ev) => {
+    const alvo = ev.target as HTMLElement;
+    if (alvo === j || alvo.closest('[data-fechar]')) return fechar();
+    const b = alvo.closest('[data-melhoria]') as HTMLElement | null;
+    if (!b) return;
+    const id = b.dataset.melhoria as IdMelhoria;
+    const r = comprarMelhoria(s, id);
+    if (!r.ok) return r.msg ? erro(r.msg) : undefined;
+    som.melhoria();
+    j.innerHTML = htmlMelhorias(s);
+    j.querySelector(`[data-melhoria="${id}"]`)?.classList.add('acabada');
+    confetes.disparar(centroDoEscritorio());
+    atualizarUI();
+  });
+}
+
+/** Centro das secretárias (ou do terreno), para confetes, moedas e números. */
+function centroDoEscritorio(): THREE.Vector3 {
+  const c = new THREE.Vector3();
+  const ds = s.secretarias.length ? s.secretarias : [{ x: LARGURA / 2, z: ALTURA / 2 }];
+  for (const d of ds) c.add(new THREE.Vector3(d.x, 0, d.z));
+  return c.divideScalar(ds.length);
+}
+
+function paraEcra(v: THREE.Vector3): [number, number] {
+  const p = v.clone().project(camara);
+  return [(p.x + 1) / 2 * innerWidth, (1 - p.y) / 2 * innerHeight];
+}
+
+/** Símbolos a sair de quem está a trabalhar: azul código, rosa design, verde testes. */
+let relogioParticulas = 0;
+function emitirTrabalho(dt: number): void {
+  const vel = montra ? 1 : menus.ecra || pausasModais ? 0 : velocidade;
+  relogioParticulas += dt * Math.min(vel, 2);
+  const md = minutoDoDia(s);
+  if (md < HORA_INICIO * 60 || md >= HORA_FIM * 60) return;
+  const ativos = s.funcionarios.filter((f) => f.estado === 'aTrabalhar' && f.projetoId !== null);
+  if (!ativos.length || relogioParticulas < 1.5 / ativos.length) return;
+  relogioParticulas = 0;
+  const f = ativos[Math.floor(Math.random() * ativos.length)];
+  const b = bonecos.get(f.id);
+  const p = s.projetos.find((o) => o.id === f.projetoId);
+  const a = p ? areaDeTrabalho(p, f) : null;
+  if (b && b.grupo.visible && a) particulas.trabalho(a, b.grupo.position);
+}
 
 caixaNoticias.querySelector('[data-recolher]')!.addEventListener('click', () => {
   caixaNoticias.classList.toggle('recolhido');
@@ -964,14 +1059,14 @@ function htmlListaProjetos(): string {
     const pct = Math.min(100, (p.trabalhoFeito / p.trabalhoTotal) * 100);
     const funcs = p.funcionalidades.map((id) => TIPOS[p.tipo].funcionalidades.find((f) => f.id === id)!.nome);
     const membros = membrosDe(s, p.id);
-    const prev = mesesRestantes(p, membros);
+    const prev = mesesRestantes(p, membros, coordenacaoDe(s));
     return `<div class="cartao projeto">
       <div class="cab"><span class="ic-tipo">${ICONE_TIPO[p.tipo]}</span>
         <div class="cresce"><b>${esc(p.nome)}</b><small>${TIPOS[p.tipo].nome}${funcs.length ? ` · ${funcs.join(', ')}` : ''}</small></div>
         <button class="mini perigo" data-acao="cancelar" data-id="${p.id}" title="Cancelar (o trabalho perde-se)">✕</button></div>
       <div class="progresso"><div style="width:${pct.toFixed(1)}%"></div><span>${pct.toFixed(0)}%</span></div>
       <div class="stats3">
-        <div><b>${Math.round(qualidadeDoProjeto(p) * 100)}%</b><small>qualidade</small></div>
+        <div><b>${Math.round(Math.min(1, qualidadeDoProjeto(p) + bonusQualidade(s)) * 100)}%</b><small>qualidade</small></div>
         <div><b>${Number.isFinite(prev) ? mesesTexto(prev) : '—'}</b><small>${Number.isFinite(prev) ? 'meses' : 'parado'}</small></div>
         <div><b>${membros.length}</b><small>${membros.length === 1 ? 'pessoa' : 'pessoas'}</small></div>
       </div>
@@ -981,7 +1076,7 @@ function htmlListaProjetos(): string {
       }).join('')}
       <div class="chips-equipa">${membros.length
         ? membros.map((f) => avatar(f.nome, especialidade(f))).join('')
-          + (membros.length > 1 ? `<small>rendimento ${Math.round(eficienciaEquipa(membros.length) * 100)}% por pessoa</small>` : '')
+          + (membros.length > 1 ? `<small>rendimento ${Math.round(eficienciaEquipa(membros.length, coordenacaoDe(s)) * 100)}% por pessoa</small>` : '')
         : '<span class="aviso">⚠ Sem equipa: o projeto está parado.</span>'}</div>
     </div>`;
   }).join('');
@@ -991,9 +1086,11 @@ function htmlConfigProjeto(): string {
   if (!tipoDisponivel(s, tipoEscolhido)) tipoEscolhido = 'utilitario';
   const d = TIPOS[tipoEscolhido];
   const equipa = equipaEscolhida();
-  const previsao = estimarProjeto(equipa, tipoEscolhido, funcEscolhidas);
+  const previsao = estimarProjeto(equipa, tipoEscolhido, funcEscolhidas, coordenacaoDe(s));
+  previsao.qualidade = Math.min(1, previsao.qualidade + bonusQualidade(s));
   const mercado = fatorMercado(s, tipoEscolhido);
-  const vendas = vendasIniciais(tipoEscolhido, funcEscolhidas, previsao.qualidade, mercado);
+  const vendas = vendasIniciais(tipoEscolhido, funcEscolhidas, previsao.qualidade, mercado)
+    * (temMelhoria(s, 'marketing') ? 1.15 : 1);
   const tipos = LISTA_TIPOS.map((t) => {
     const livre = tipoDisponivel(s, t);
     const n = TIPOS[t].produtosNecessarios;
@@ -1026,7 +1123,7 @@ function htmlConfigProjeto(): string {
     <div class="rotulo">Trabalho por área</div>
     <div class="divisao">${divisao}</div>
     ${funcs ? `<div class="rotulo">Funcionalidades</div><div class="lista-checks">${funcs}</div>` : ''}
-    <div class="rotulo">Equipa${equipa.length > 1 ? ` · rendimento ${Math.round(eficienciaEquipa(equipa.length) * 100)}% por pessoa` : ''}</div>
+    <div class="rotulo">Equipa${equipa.length > 1 ? ` · rendimento ${Math.round(eficienciaEquipa(equipa.length, coordenacaoDe(s)) * 100)}% por pessoa` : ''}</div>
     ${pessoas ? `<div class="lista-checks">${pessoas}</div>` : '<div class="vazio aviso">Contrata alguém primeiro (separador 🤝 Contratar).</div>'}
     <div class="previsao">
       <div><small>Duração</small><b>${Number.isFinite(meses) ? `${mesesTexto(meses)} m` : equipa.length ? '> 3 anos' : '—'}</b></div>
@@ -1168,7 +1265,7 @@ fim.addEventListener('click', (ev) => {
 
 // --- Avisos flutuantes e notícias ------------------------------------------
 
-const ICONE_AVISO: Partial<Record<string, string>> = { lancamento: '🚀', desbloqueio: '🔓', falencia: '💥', erro: '⛔', info: 'ℹ️' };
+const ICONE_AVISO: Partial<Record<string, string>> = { nivel: '⭐', missao: '🎯', lancamento: '🚀', desbloqueio: '🔓', falencia: '💥', erro: '⛔', info: 'ℹ️' };
 
 function avisoFlutuante(texto: string, tipo: string, icone = ICONE_AVISO[tipo] ?? ''): void {
   const e = document.createElement('div');
@@ -1195,20 +1292,41 @@ function processarMensagensNovas(): void {
   for (const m of s.mensagens) {
     if (vistas.has(m)) continue;
     vistas.add(m);
-    if (m.tipo === 'lancamento' || m.tipo === 'conquista') {
-      const c = new THREE.Vector3();
-      const ds = s.secretarias.length ? s.secretarias : [{ x: LARGURA / 2, z: ALTURA / 2 }];
-      for (const d of ds) c.add(new THREE.Vector3(d.x, 0, d.z));
-      confetes.disparar(c.divideScalar(ds.length));
-    }
+    if (m.tipo === 'lancamento' || m.tipo === 'conquista' || m.tipo === 'nivel') confetes.disparar(centroDoEscritorio());
     if (montra) continue;
     const t = m.tipo ?? 'info';
     if (t === 'mes') {
       const r = s.historico.find((h) => h.mes === Math.round(m.minuto / MIN_POR_MES) - 1);
       const saldo = r ? r.receitas - r.despesas : 0;
       mostrarDelta(saldo);
+      const centro = centroDoEscritorio();
+      if (saldo > 0) particulas.repuxo(centro, Math.min(40, 10 + Math.round(saldo / 600)), 'moeda');
+      const [x, y] = paraEcra(centro.setY(1.8));
+      numeroFlutuante(`${saldo >= 0 ? '+' : ''}${euros(saldo)}`, saldo >= 0 ? 'bom' : 'mau', x, y);
       if (def.avisos) avisoFlutuante(`Fecho do mês: <b>${saldo >= 0 ? '+' : ''}${euros(saldo)}</b>`, saldo >= 0 ? 'mes-bom' : 'mes-mau', '💶');
       if (saldo > 0) som.dinheiro();
+      continue;
+    }
+    if (t === 'lancamento') {
+      const p = [...s.produtos].reverse().find((o) => o.lancadoEm === m.minuto);
+      if (p) {
+        celebracoes.lancamento({ produto: p, xp: xpDeLancamento(p.tipo, p.qualidade), icone: ICONE_TIPO[p.tipo] });
+        if (def.avisos && m.texto.includes('saturado')) avisoFlutuante(esc(m.texto.slice(m.texto.indexOf('O mercado'))), 'aviso', '📉');
+        continue;
+      }
+    }
+    if (t === 'nivel') {
+      const n = Number(/nível (\d+)/.exec(m.texto)?.[1] ?? nivelDaEmpresa(s));
+      celebracoes.nivel(n, (Object.keys(MELHORIAS) as IdMelhoria[]).filter((id) => MELHORIAS[id].nivel === n));
+      particulas.repuxo(centroDoEscritorio(), 30, 'estrela');
+      continue;
+    }
+    if (t === 'missao') {
+      som.missao();
+      if (def.avisos) avisoFlutuante(esc(m.texto.replace(/^🎯 /, '')), 'missao', '🎯');
+      painelMissoes.raiz.classList.remove('cumpriu');
+      void painelMissoes.raiz.offsetWidth;
+      painelMissoes.raiz.classList.add('cumpriu');
       continue;
     }
     const efeitos: Partial<Record<string, () => void>> = {
@@ -1255,14 +1373,43 @@ function atualizarTopo(dt: number): void {
   texto('.data', data);
   texto('.hora', hora);
   texto('.ceu', ambiente.noite > 0.5 && def.cicloDia ? '🌙' : '☀️');
+
+  const emblema = topo.querySelector('.nivel-emblema') as HTMLElement;
+  texto('.nivel-emblema .n', String(nivelDaEmpresa(s)));
+  const pr = progressoNivel(s);
+  const arco = (CIRCUNFERENCIA * (1 - (pr.precisa ? pr.feito / pr.precisa : 1))).toFixed(1);
+  if (arco !== arcoMostrado) {
+    (topo.querySelector('.nivel-emblema .arco') as SVGElement).style.strokeDashoffset = arco;
+    arcoMostrado = arco;
+  }
+  const pontos = pontosMelhoria(s);
+  texto('.nivel-emblema .pontos', pontos > 0 ? String(pontos) : '');
+  emblema.classList.toggle('com-pontos', pontos > 0);
+  if (xpMostrado < 0 || xpMostrado > s.xp) xpMostrado = s.xp;
+  if (s.xp > xpMostrado) {
+    const r = emblema.getBoundingClientRect();
+    numeroFlutuante(`+${s.xp - xpMostrado} XP`, 'xp', r.left + r.width / 2, r.bottom + 14);
+    emblema.classList.remove('ganhou');
+    void emblema.offsetWidth;
+    emblema.classList.add('ganhou');
+    xpMostrado = s.xp;
+  }
+  const serie = serieDeLucro(s);
+  (topo.querySelector('.serie') as HTMLElement).style.display = serie >= 2 ? '' : 'none';
+  texto('.serie .valor', `${serie} meses`);
 }
 
+const CIRCUNFERENCIA = 2 * Math.PI * 17;
+let arcoMostrado = '';
+let xpMostrado = -1;
+
 function atualizarUI(): void {
+  painelMissoes.atualizar(s, !montra);
   if (montra) return;
   texto('.empresa', s.nome);
   const vendas = s.produtos.reduce((t, p) => t + p.vendasMes, 0);
   const salarios = s.funcionarios.reduce((t, f) => t + f.salario, 0);
-  const saldo = vendas - salarios - ECON.rendaMensal;
+  const saldo = vendas - salarios - rendaDe(s);
   texto('.saldo .valor', `${saldo >= 0 ? '+' : ''}${euros(saldo)}/mês`);
   topo.querySelector('.saldo')!.classList.toggle('negativo', saldo < 0);
   texto('.equipa', String(s.funcionarios.length));
@@ -1341,6 +1488,8 @@ function aplicarDefinicoes(): void {
   renderer.setSize(innerWidth, innerHeight);
   ambiente.sombras = def.sombras;
   configurarSom(def.sons, def.volume);
+  posfx.definir(def.qualidade === 'alta' ? 'completo' : def.qualidade === 'media' ? 'acabamento' : 'nenhum');
+  posfx.redimensionar(innerWidth, innerHeight, pixelRatio(def.qualidade));
 }
 
 /** Troca o jogo em curso; a cena e as escolhas da interface voltam a ser construídas a partir dele. */
@@ -1361,6 +1510,7 @@ function usarEstado(novo: Estado, eMontra = false): void {
   textoArrasto = '';
   ferramenta = 'selecionar';
   dinheiroMostrado = s.dinheiro;
+  xpMostrado = -1;
   marcarMensagensVistas();
   document.title = eMontra ? 'Software Lda.' : `${s.nome} — Software Lda.`;
   if (import.meta.env.DEV) Object.assign(window, { __jogo: s });
@@ -1427,10 +1577,10 @@ const menus = new Menus({
   },
   continuar: carregar,
   fundar: (opcoes) => {
-    comecarJogo(novoJogo(Date.now() & 0xffff, LARGURA, ALTURA, opcoes));
+    comecarJogo(novoJogo(Date.now() & 0xffff, LARGURA, ALTURA, { ...opcoes, missoes: true }));
     // Passa a ser o jogo mais recente: ao recarregar a página continua este, não o antigo.
     escreverLugar(LUGAR_AUTO, s);
-    avisoFlutuante(`Bem-vindo à <b>${esc(s.nome)}</b>! Começa por colocar secretárias (tecla 4) e contratar no separador 🤝 Contratar.`, 'info', '👋');
+    avisoFlutuante(`Bem-vindo à <b>${esc(s.nome)}</b>! Segue as 🎯 missões à esquerda: começa por colocar secretárias (tecla 4) e contratar no separador 🤝 Contratar.`, 'info', '👋');
   },
   voltarAoJogo: () => {
     menus.mostrar(null);
@@ -1463,6 +1613,7 @@ addEventListener('resize', () => {
   camara.aspect = innerWidth / innerHeight;
   camara.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  posfx.redimensionar(innerWidth, innerHeight, pixelRatio(def.qualidade));
   if (montra) vistaDeMenu();
   graficoDesenhado = '';
 });
@@ -1474,7 +1625,7 @@ function ciclo(agora: number): void {
   const dt = Math.min(0.1, (agora - ultimo) / 1000);
   ultimo = agora;
   // A montra corre sempre; o jogo a sério para enquanto há um menu aberto.
-  if ((montra || !menus.ecra) && !s.falencia) {
+  if ((montra || (!menus.ecra && pausasModais === 0)) && !s.falencia) {
     // Fora do horário e sem ninguém no escritório, o tempo corre mais depressa.
     const vazio = s.funcionarios.every((f) => !f.dentro);
     const md = minutoDoDia(s);
@@ -1492,13 +1643,16 @@ function ciclo(agora: number): void {
   moverCamara(dt);
   ambiente.atualizar(dt, minutoDoDia(s) + acumulado, def.cicloDia);
   confetes.atualizar(dt);
+  emitirTrabalho(dt);
+  particulas.atualizar(dt);
   if (!montra) atualizarTopo(dt);
   if (agora - ultimaUI > 150) {
     atualizarUI();
     ultimaUI = agora;
   }
   controlos.update(dt);
-  renderer.render(cena, camara);
+  posfx.intensidade(def.cicloDia ? ambiente.noite : 0);
+  posfx.render();
   requestAnimationFrame(ciclo);
 }
 

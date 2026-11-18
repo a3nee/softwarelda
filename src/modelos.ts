@@ -18,9 +18,9 @@ export const MAT = {
   metal: mat(0xaab3c5, { metalness: 0.7, roughness: 0.3 }),
   preto: mat(0x1c1f2b, { roughness: 0.45 }),
   ecraDesligado: mat(0x0d1018, { roughness: 0.15, metalness: 0.2 }),
-  ecraLigado: mat(0x0d1a2a, { emissive: 0x38bdf8, emissiveIntensity: 1.4, roughness: 0.2 }),
-  ecraCodigo: mat(0x10241a, { emissive: 0x4ade80, emissiveIntensity: 1.2, roughness: 0.2 }),
-  ecraDesign: mat(0x2a1024, { emissive: 0xf472b6, emissiveIntensity: 1.2, roughness: 0.2 }),
+  ecraLigado: mat(0x0d1a2a, { emissive: 0x38bdf8, emissiveIntensity: 1.9, roughness: 0.2 }),
+  ecraCodigo: mat(0x10241a, { emissive: 0x4ade80, emissiveIntensity: 1.7, roughness: 0.2 }),
+  ecraDesign: mat(0x2a1024, { emissive: 0xf472b6, emissiveIntensity: 1.7, roughness: 0.2 }),
   terracota: mat(0xc8643c, { roughness: 0.8 }),
   terra: mat(0x4a3424, { roughness: 1 }),
   folha: mat(0x34c46a, { roughness: 0.7, flatShading: true }),
@@ -239,7 +239,7 @@ export function criarBoneco(id: number, area: keyof typeof COR_AREA): Boneco {
   if (estilo === 2) cabeca.add(caixa(0.12, 0.08, 0.1, cabelo, 0, 0.16, -0.02, 0.04)); // poupa
   corpo.add(cabeca);
 
-  const indicador = new THREE.Mesh(geoIndicador, mat(0x34d399, { emissive: 0x34d399, emissiveIntensity: 0.8, roughness: 0.3 }));
+  const indicador = new THREE.Mesh(geoIndicador, mat(0x34d399, { emissive: 0x34d399, emissiveIntensity: 1.8, roughness: 0.3 }));
   indicador.position.y = 1.12;
   grupo.add(indicador);
   const anel = new THREE.Mesh(geoAnel, matAnel);

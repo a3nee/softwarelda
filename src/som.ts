@@ -67,4 +67,22 @@ export const som = {
   },
   erro: () => tom(150, 0, 0.16, 'sawtooth', 0.07, 110),
   falencia: () => [392, 330, 262, 196].forEach((f, i) => tom(f, i * 0.24, 0.45, 'triangle', 0.16)),
+  nivel: () => {
+    [523, 659, 784, 1047, 1319].forEach((f, i) => tom(f, i * 0.08, 0.3, 'triangle', 0.15));
+    tom(1568, 0.42, 0.9, 'sine', 0.12);
+    tom(2093, 0.5, 0.8, 'sine', 0.06);
+  },
+  missao: () => {
+    tom(1047, 0, 0.12, 'square', 0.05);
+    tom(1397, 0.08, 0.14, 'square', 0.05);
+    tom(2093, 0.16, 0.4, 'triangle', 0.08);
+  },
+  critica: (nota: number) => {
+    tom(1800, 0, 0.04, 'square', 0.03, 900);
+    tom(260 + nota * 75, 0.03, 0.18, 'triangle', 0.13);
+  },
+  melhoria: () => {
+    tom(392, 0, 0.12, 'triangle', 0.12);
+    tom(784, 0.08, 0.4, 'triangle', 0.14, 1568);
+  },
 };

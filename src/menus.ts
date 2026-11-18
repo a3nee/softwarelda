@@ -203,13 +203,14 @@ export class Menus {
         ${cartao('📁', 'Desenvolve', 'Escolhe o tipo de software, as funcionalidades e a equipa. Cada tipo pede áreas diferentes (um jogo precisa de muito design). Equipas grandes acabam mais depressa, mas cada pessoa rende menos.')}
         ${cartao('📦', 'Vende', 'Um produto lançado vende todos os meses, cada vez menos. Vários produtos do mesmo tipo saturam o mercado. Lançar produtos desbloqueia tipos novos: editor de texto, antivírus e jogo.')}
         ${cartao('😊', 'Felicidade', `O losango por cima da cabeça mostra a felicidade. Quem está feliz trabalha mais depressa. A decoração alegra quem trabalha na mesma sala: ${objetos}. Objetos repetidos valem menos; no máximo +${DECORACAO.bonusMaximo}.`)}
+        ${cartao('🎯', 'Missões e níveis', 'Cumpre as missões à esquerda para ganhar experiência (e dinheiro a partir do nível 4). Lançamentos com boas críticas, conquistas e meses seguidos com lucro 🔥 também dão experiência. Cada nível dá um ponto de melhoria: abre-as com <kbd>M</kbd> ou no emblema ao lado do nome.')}
         ${cartao('💶', 'Dinheiro', `Salários e renda (${euros(ECON.rendaMensal)}) pagam-se no fecho do mês. Abaixo de ${euros(ECON.limiteFalencia)}, a empresa vai à falência. Há autosave no fecho de cada mês.`)}
       </div>
       <h3 class="titulo-atalhos">⌨️ Atalhos</h3>
       <div class="atalhos">
         <span><kbd>1</kbd>–<kbd>6</kbd> ferramentas</span><span><kbd>Espaço</kbd> pausa</span><span><kbd>Esc</kbd> menu / cancelar</span>
         <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> mover a câmara</span><span><kbd>Q</kbd><kbd>E</kbd> rodar</span>
-        <span>Botão direito: rodar · meio: arrastar · roda: zoom</span><span><kbd>Ctrl</kbd>+<kbd>S</kbd> guardar</span>
+        <span>Botão direito: rodar · meio: arrastar · roda: zoom</span><span><kbd>Ctrl</kbd>+<kbd>S</kbd> guardar</span><span><kbd>M</kbd> melhorias</span>
       </div>
       <div class="linha-botoes"><button data-m="voltar" class="primario">Percebi!</button></div>
     </div>`;

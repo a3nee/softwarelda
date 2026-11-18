@@ -1702,7 +1702,7 @@ export const MELHORIAS: Record<IdMelhoria, DefMelhoria> = {
   cafe: { icone: '☕', nome: 'Café de especialidade', descricao: 'Mais 5 de felicidade para toda a equipa.', nivel: 2 },
   recrutador: { icone: '🧲', nome: 'Recrutador', descricao: 'Aparece mais um candidato todos os meses.', nivel: 3 },
   renda: { icone: '🏷️', nome: 'Renda negociada', descricao: 'A renda baixa de 1 500 € para 900 € por mês.', nivel: 3 },
-  agil: { icone: '🔁', nome: 'Metodologia ágil', descricao: 'Equipas grandes perdem metade do rendimento na coordenação.', nivel: 4 },
+  agil: { icone: '🔁', nome: 'Metodologia ágil', descricao: 'Equipas grandes perdem só metade do que perdiam a coordenar-se.', nivel: 4 },
   qualidade: { icone: '🧪', nome: 'Testes automáticos', descricao: 'Mais 5 pontos de qualidade em cada lançamento.', nivel: 4 },
   premios: { icone: '🎉', nome: 'Prémios de lançamento', descricao: 'Quem lança um produto ganha 15 de felicidade.', nivel: 5 },
   formacao: { icone: '🎓', nome: 'Formação contínua', descricao: 'Todos melhoram 1 ponto na especialidade, todos os meses.', nivel: 5 },
@@ -1893,6 +1893,12 @@ export const CRITICOS = ['Bits & Bytes', 'Revista PC', 'TecnoBlog', 'Pixel Diár
 function hashTexto(texto: string): number {
   let h = 0x811c9dc5;
   for (let i = 0; i < texto.length; i++) h = Math.imul(h ^ texto.charCodeAt(i), 0x01000193);
+  // Mistura final (fmix32 do murmur3): textos quase iguais dão valores bem diferentes.
+  h ^= h >>> 16;
+  h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
   return (h >>> 0) / 4294967296;
 }
 

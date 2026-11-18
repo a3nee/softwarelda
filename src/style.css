@@ -364,6 +364,9 @@ input[type=range] { width: 100%; accent-color: var(--violeta); }
 .nota-pausa, .janela .nota { text-align: center; margin-top: 14px; }
 
 .grelha-ajuda { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 12px; }
+.janela:has(.grelha-ajuda) { width: min(1180px, 96vw); max-height: 94vh; overflow-y: auto; }
+.grelha-ajuda { grid-template-columns: repeat(auto-fill, minmax(255px, 1fr)); }
+.cartao-ajuda p { font-size: 13px; }
 .cartao-ajuda { display: flex; gap: 12px; padding: 14px; border-radius: 16px; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.07); }
 .cartao-ajuda .ic { font-size: 28px; }
 .cartao-ajuda h3 { margin: 0 0 4px; font-size: 15px; }
@@ -398,6 +401,7 @@ input[type=range] { width: 100%; accent-color: var(--violeta); }
 @keyframes subir { 0% { opacity: 0; transform: translate(-50%, 0); } 15% { opacity: 1; } 100% { opacity: 0; transform: translate(-50%, 26px); } }
 
 /* ------------------------------------------------------------- ecrãs menores */
+@media (max-width: 1500px) { #topo .guardado { display: none; } }
 @media (max-width: 1350px) {
   .saldo, .guardado { display: none; }
   .ferr { width: 68px; }
@@ -407,3 +411,164 @@ input[type=range] { width: 100%; accent-color: var(--violeta); }
   #lateral { width: 320px; }
   #noticias { width: 300px; }
 }
+
+/* ============================ Progressão: nível, série, missões ============================ */
+#topo .nivel-emblema { position: relative; width: 44px; height: 44px; padding: 0; border: 0; background: none;
+  box-shadow: none; flex: none; display: grid; place-items: center; cursor: pointer; }
+#topo .nivel-emblema:hover { transform: scale(1.06); background: none; }
+#topo .nivel-emblema svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); overflow: visible; }
+#topo .nivel-emblema circle { fill: none; stroke-width: 4; }
+#topo .nivel-emblema .fundo { stroke: rgba(255, 255, 255, 0.1); fill: rgba(8, 10, 28, 0.7); }
+#topo .nivel-emblema .arco { stroke: url(#gradNivel); stroke-linecap: round; stroke-dasharray: 106.8;
+  stroke-dashoffset: 106.8; transition: stroke-dashoffset 0.7s cubic-bezier(0.2, 0.8, 0.3, 1);
+  filter: drop-shadow(0 0 4px rgba(139, 92, 246, 0.8)); }
+#topo .nivel-emblema .n { position: relative; font-size: 17px; font-weight: 900; color: #fff; text-shadow: 0 0 10px rgba(139, 92, 246, 0.9); }
+#topo .nivel-emblema .pontos { position: absolute; top: -3px; right: -5px; min-width: 18px; height: 18px; padding: 0 4px;
+  border-radius: 9px; background: linear-gradient(135deg, #fbbf24, #f97316); color: #1c1003; font-size: 11px;
+  font-weight: 900; display: grid; place-items: center; box-shadow: 0 0 10px rgba(251, 191, 36, 0.8); }
+#topo .nivel-emblema .pontos:empty { display: none; }
+#topo .nivel-emblema.com-pontos { animation: pulsarOuro 1.6s ease-in-out infinite; }
+#topo .nivel-emblema.ganhou .n { animation: bump 0.5s cubic-bezier(0.2, 0.9, 0.3, 1.6); }
+#topo .serie { color: #fdba74; font-weight: 700; }
+#topo .serie .ic { display: inline-block; animation: chama 1.1s ease-in-out infinite; }
+
+#missoes { position: fixed; left: 12px; top: 84px; width: 318px; border-radius: 16px; padding: 10px 10px 8px; z-index: 6; }
+#missoes .cab { display: flex; align-items: center; gap: 8px; padding: 0 4px 2px; font-size: 13.5px; }
+#missoes .cab small { flex: 1; color: var(--sub); font-size: 11.5px; }
+#missoes .cab button { padding: 0 8px; height: 22px; border-radius: 6px; font-size: 13px; }
+#missoes.recolhido .lista { display: none; }
+#missoes.cumpriu { animation: brilhoMissao 0.9s ease; }
+#missoes .missao { display: grid; grid-template-columns: 30px 1fr auto; gap: 9px; align-items: center; padding: 8px 9px;
+  margin-top: 6px; border-radius: 12px; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.07); }
+#missoes .missao.nova { animation: entrarMissao 0.55s cubic-bezier(0.2, 0.9, 0.3, 1.3); }
+#missoes .missao.quase { border-color: rgba(251, 191, 36, 0.4); background: linear-gradient(90deg, rgba(251, 191, 36, 0.08), rgba(255, 255, 255, 0.03)); }
+#missoes .missao .ic { font-size: 20px; text-align: center; filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.4)); }
+#missoes .txt { display: block; font-size: 12.5px; font-weight: 650; line-height: 1.3; }
+#missoes .barra { height: 6px; margin: 5px 0 3px; border-radius: 3px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
+#missoes .barra i { display: block; height: 100%; border-radius: 3px; background: var(--grad);
+  box-shadow: 0 0 8px rgba(139, 92, 246, 0.7); transition: width 0.6s cubic-bezier(0.2, 0.8, 0.3, 1); }
+#missoes .corpo small { font-size: 11px; color: var(--sub); font-variant-numeric: tabular-nums; }
+#missoes .premio { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 11px; color: #fde68a; white-space: nowrap; font-weight: 700; }
+#missoes .premio b { color: #6ee7b7; font-size: 12px; }
+#missoes .vazio { font-size: 12px; color: var(--sub); padding: 8px 4px 2px; }
+.aviso-flut.t-missao { background: linear-gradient(90deg, rgba(6, 95, 70, 0.94), rgba(18, 22, 48, 0.94)); border-left: 4px solid #34d399; }
+.aviso-flut.t-nivel { background: linear-gradient(90deg, rgba(146, 64, 14, 0.94), rgba(18, 22, 48, 0.94)); border-left: 4px solid #fbbf24; }
+
+/* ================================== Janela das melhorias ================================== */
+.melhorias .cab-nivel { display: flex; align-items: center; gap: 18px; margin-bottom: 6px; }
+.melhorias .medalha { flex: none; width: 78px; height: 78px; border-radius: 50%; background: var(--grad); display: grid;
+  place-items: center; align-content: center; box-shadow: 0 0 34px rgba(139, 92, 246, 0.6), inset 0 -6px 14px rgba(0, 0, 0, 0.3); }
+.melhorias .medalha b { font-size: 32px; font-weight: 900; line-height: 1; }
+.melhorias .medalha small { font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em; opacity: 0.9; }
+.melhorias .info { flex: 1; }
+.melhorias .info h2 { margin: 0 0 8px; }
+.melhorias .info small { font-size: 12px; color: var(--sub); }
+.xp-barra { height: 10px; margin-bottom: 5px; border-radius: 5px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
+.xp-barra i { display: block; height: 100%; border-radius: 5px; background: var(--grad); box-shadow: 0 0 12px rgba(244, 114, 182, 0.7); }
+.melhorias .pontos { flex: none; text-align: center; padding: 10px 18px; border-radius: 14px; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--borda); }
+.melhorias .pontos b { display: block; font-size: 28px; font-weight: 900; line-height: 1.1; }
+.melhorias .pontos small { font-size: 11px; color: var(--sub); }
+.melhorias .pontos.tem { border-color: #fbbf24; animation: pulsarOuro 1.6s ease-in-out infinite; }
+.melhorias .pontos.tem b { color: #fbbf24; }
+.melhorias .nota { font-size: 13px; color: var(--sub); margin: 8px 0 14px; }
+.grelha-melhorias { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+.melhoria { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 14px 10px 10px; text-align: center;
+  border-radius: 14px; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); color: inherit;
+  font: inherit; transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s; }
+.melhoria:disabled { opacity: 1; filter: none; }
+.melhoria .ic { width: 52px; height: 52px; display: grid; place-items: center; font-size: 27px; border-radius: 50%; background: rgba(255, 255, 255, 0.07); }
+.melhoria b { font-size: 13px; }
+.melhoria small { flex: 1; font-size: 11.5px; line-height: 1.35; color: var(--sub); }
+.melhoria .estado { font-size: 11px; font-weight: 800; padding: 4px 9px; border-radius: 999px; background: rgba(255, 255, 255, 0.07); }
+.melhoria.bloq:disabled { opacity: 0.42; filter: grayscale(0.85); }
+.melhoria.tem { border-color: rgba(52, 211, 153, 0.6); background: linear-gradient(180deg, rgba(52, 211, 153, 0.16), rgba(255, 255, 255, 0.03)); }
+.melhoria.tem .ic { background: rgba(52, 211, 153, 0.2); box-shadow: 0 0 18px rgba(52, 211, 153, 0.4); }
+.melhoria.tem .estado { background: rgba(52, 211, 153, 0.22); color: #6ee7b7; }
+.melhoria.pode { cursor: pointer; border-color: rgba(251, 191, 36, 0.6); box-shadow: 0 0 22px rgba(251, 191, 36, 0.2); }
+.melhoria.pode:hover { transform: translateY(-4px); box-shadow: 0 10px 30px rgba(251, 191, 36, 0.35); }
+.melhoria.pode .estado { background: linear-gradient(135deg, #f59e0b, #f472b6); color: #fff; }
+.melhoria.acabada { animation: comprada 0.7s cubic-bezier(0.2, 0.9, 0.3, 1.5); }
+
+/* ================================= Lançamento e críticas ================================= */
+.celebracao { z-index: 120; animation: aparecer 0.25s ease; }
+.celebracao.sair { opacity: 0; transition: opacity 0.2s; }
+.janela.lancamento { position: relative; width: min(640px, 94vw); overflow: hidden; text-align: center; }
+.lancamento .raios { position: absolute; left: 50%; top: 34%; width: 1300px; height: 1300px; margin: -650px 0 0 -650px; pointer-events: none;
+  background: repeating-conic-gradient(rgba(139, 92, 246, 0.13) 0 7deg, transparent 7deg 18deg);
+  -webkit-mask-image: radial-gradient(circle, #000 0, transparent 55%); mask-image: radial-gradient(circle, #000 0, transparent 55%);
+  animation: girar 26s linear infinite; }
+.lancamento .cab { position: relative; display: flex; align-items: center; justify-content: center; gap: 16px; margin-bottom: 20px; text-align: left; }
+.lancamento .ic-grande { width: 72px; height: 72px; display: grid; place-items: center; font-size: 40px; border-radius: 20px; background: var(--grad);
+  box-shadow: 0 0 34px rgba(139, 92, 246, 0.6); animation: saltar 0.7s cubic-bezier(0.2, 0.9, 0.3, 1.5); }
+.lancamento .cab small { font-size: 11px; font-weight: 800; color: var(--sub); text-transform: uppercase; letter-spacing: 0.1em; }
+.lancamento .cab h2 { margin: 2px 0 0; font-size: 30px; }
+.criticas { position: relative; display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 4px 0 20px; perspective: 900px; }
+.critica .carta { position: relative; height: 100px; transform-style: preserve-3d; transition: transform 0.6s cubic-bezier(0.2, 0.9, 0.3, 1.25); }
+.critica.virada .carta { transform: rotateY(180deg); }
+.critica .tras, .critica .frente { position: absolute; inset: 0; display: grid; place-items: center; align-content: center;
+  border-radius: 14px; backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+.critica .tras { background: linear-gradient(135deg, #312e81, #1e1b4b); border: 1px solid rgba(165, 180, 252, 0.3);
+  font-size: 36px; font-weight: 900; color: rgba(199, 210, 254, 0.45); }
+.critica .frente { transform: rotateY(180deg); background: rgba(10, 12, 32, 0.85); border: 2px solid; }
+.critica .frente b { font-size: 42px; font-weight: 900; line-height: 1; }
+.critica .frente small { font-size: 12px; color: var(--sub); }
+.critica .frente.boa { border-color: #34d399; color: #6ee7b7; box-shadow: 0 0 26px rgba(52, 211, 153, 0.4); }
+.critica .frente.media { border-color: #fbbf24; color: #fde68a; box-shadow: 0 0 26px rgba(251, 191, 36, 0.35); }
+.critica .frente.ma { border-color: #f87171; color: #fca5a5; box-shadow: 0 0 26px rgba(248, 113, 113, 0.35); }
+.critica .revista { display: block; margin-top: 8px; font-size: 12px; font-weight: 700; color: var(--sub); }
+.lancamento .resultado { position: relative; opacity: 0; transform: translateY(12px) scale(0.96);
+  transition: opacity 0.4s, transform 0.55s cubic-bezier(0.2, 0.9, 0.3, 1.35); }
+.lancamento .resultado.mostrar { opacity: 1; transform: none; }
+.resultado .media { display: flex; align-items: center; justify-content: center; gap: 14px; }
+.resultado .media b { font-size: 58px; font-weight: 900; line-height: 1.05; font-variant-numeric: tabular-nums; background: var(--grad);
+  -webkit-background-clip: text; background-clip: text; color: transparent; filter: drop-shadow(0 4px 18px rgba(139, 92, 246, 0.5)); }
+.resultado .estrelas { font-size: 28px; letter-spacing: 2px; color: #fbbf24; text-shadow: 0 0 14px rgba(251, 191, 36, 0.7); }
+.resultado .veredicto { display: inline-block; margin: 6px 0 16px; padding: 7px 20px; border-radius: 999px; font-size: 15px; font-weight: 800; }
+.veredicto.boa { background: rgba(52, 211, 153, 0.18); color: #6ee7b7; }
+.veredicto.media { background: rgba(251, 191, 36, 0.16); color: #fde68a; }
+.veredicto.ma { background: rgba(248, 113, 113, 0.16); color: #fca5a5; }
+.resultado .info { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; font-size: 13px; }
+.resultado .info span { padding: 7px 12px; border-radius: 10px; background: rgba(255, 255, 255, 0.06); }
+.resultado .info .xp b { color: #fde68a; }
+.lancamento .linha-botoes { position: relative; justify-content: center; margin-top: 18px; }
+
+/* ===================================== Subir de nível ===================================== */
+.subida-nivel { position: fixed; inset: 0; z-index: 130; display: grid; place-items: center; pointer-events: none; animation: aparecer 0.3s ease; }
+.subida-nivel.sair { opacity: 0; transition: opacity 0.6s; }
+.subida-nivel .raios { position: absolute; left: 50%; top: 50%; width: 1700px; height: 1700px; margin: -850px 0 0 -850px;
+  background: repeating-conic-gradient(rgba(251, 191, 36, 0.2) 0 5deg, transparent 5deg 14deg);
+  -webkit-mask-image: radial-gradient(circle, #000 0, transparent 50%); mask-image: radial-gradient(circle, #000 0, transparent 50%);
+  animation: girar 16s linear infinite; }
+.subida-nivel .conteudo { position: relative; display: grid; justify-items: center; gap: 8px; text-align: center; animation: nivelEntra 0.75s cubic-bezier(0.2, 0.9, 0.3, 1.4); }
+.subida-nivel small { font-size: 16px; font-weight: 800; color: #fde68a; text-transform: uppercase; letter-spacing: 0.22em; text-shadow: 0 2px 14px rgba(0, 0, 0, 0.7); }
+.subida-nivel b { font-size: clamp(64px, 11vw, 136px); font-weight: 900; line-height: 1; letter-spacing: -0.02em;
+  background: linear-gradient(180deg, #fffbe6 0%, #fbbf24 55%, #f97316 100%); -webkit-background-clip: text; background-clip: text; color: transparent;
+  filter: drop-shadow(0 8px 28px rgba(251, 146, 60, 0.65)); }
+.subida-nivel .ponto { font-size: 15px; font-weight: 700; padding: 8px 18px; border-radius: 999px; background: rgba(12, 14, 36, 0.85); border: 1px solid rgba(251, 191, 36, 0.55); }
+.subida-nivel .novas { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 4px; }
+.subida-nivel .novas span { font-size: 13px; padding: 6px 12px; border-radius: 10px; background: rgba(12, 14, 36, 0.88); border: 1px solid var(--borda); }
+
+/* ==================================== Números a subir ==================================== */
+.num-flut { position: fixed; z-index: 90; transform: translate(-50%, -50%); pointer-events: none; white-space: nowrap;
+  font-size: 28px; font-weight: 900; font-variant-numeric: tabular-nums; text-shadow: 0 2px 12px rgba(0, 0, 0, 0.75);
+  animation: subirNum 2.4s cubic-bezier(0.2, 0.8, 0.3, 1) forwards; }
+.num-flut.bom { color: #6ee7b7; }
+.num-flut.mau { color: #fca5a5; }
+.num-flut.xp { font-size: 15px; color: #fde68a; text-shadow: 0 0 10px rgba(251, 191, 36, 0.8), 0 2px 6px rgba(0, 0, 0, 0.8); }
+
+@keyframes girar { to { transform: rotate(360deg); } }
+@keyframes pulsarOuro { 0%, 100% { filter: drop-shadow(0 0 0 rgba(251, 191, 36, 0)); } 50% { filter: drop-shadow(0 0 9px rgba(251, 191, 36, 0.95)); } }
+@keyframes bump { 50% { transform: scale(1.35); } }
+@keyframes chama { 0%, 100% { transform: scale(1) rotate(0); } 50% { transform: scale(1.18) rotate(-7deg); } }
+@keyframes entrarMissao { from { opacity: 0; transform: translateX(-26px) scale(0.95); } }
+@keyframes brilhoMissao { 0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.9); } 100% { box-shadow: 0 0 0 18px rgba(52, 211, 153, 0); } }
+@keyframes comprada { 0% { transform: scale(0.85); } 60% { transform: scale(1.1); } 100% { transform: none; } }
+@keyframes saltar { 0% { transform: scale(0.3) rotate(-25deg); } }
+@keyframes nivelEntra { 0% { opacity: 0; transform: scale(2.3); filter: blur(10px); } }
+@keyframes subirNum {
+  0% { opacity: 0; transform: translate(-50%, -20%) scale(0.5); }
+  14% { opacity: 1; transform: translate(-50%, -70%) scale(1.2); }
+  28% { transform: translate(-50%, -85%) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -260%) scale(1); }
+}
+@media (max-height: 760px) { #missoes .missao small { display: none; } }

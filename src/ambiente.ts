@@ -305,8 +305,8 @@ export class Ambiente {
     this.hemi.color.copy(COR_HEMI_DIA).lerp(COR_HEMI_NOITE, mistura(a.luzes, b.luzes));
     this.interior.intensity = mistura(a.interior, b.interior) * 1.1;
     const luzes = mistura(a.luzes, b.luzes);
-    this.matLuz.emissiveIntensity = luzes * 2.2;
-    this.matJanela.emissiveIntensity = luzes * 1.3;
+    this.matLuz.emissiveIntensity = luzes * 3.4;
+    this.matJanela.emissiveIntensity = luzes * 2.2;
     this.noite = luzes;
 
     // Sol de este (manhã) para oeste (tarde); de noite, a lua fica alta e fixa.
