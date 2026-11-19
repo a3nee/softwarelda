@@ -15,6 +15,21 @@ const NEVOA_DIA = new THREE.Color(0xc4d6ea);
 const NEVOA_POR = new THREE.Color(0xe7b48e);
 const NEVOA_NOITE = new THREE.Color(0x0c1324);
 
+// Traçado das ruas (em unidades do mundo)
+const RUA_X = -6.5; // estrada principal, em frente ao escritório (ao longo de z)
+const RUA_T_Z = -22; // rua transversal (ao longo de x)
+const MEIA_RUA = 2.1; // meia largura do asfalto
+const MEIA_RUA_PASSEIO = 3.4; // meia largura do asfalto + passeio
+
+interface Retangulo {
+  x0: number;
+  x1: number;
+  z0: number;
+  z1: number;
+  /** Se a relva (tufos e flores) pode lá crescer. */
+  relva: boolean;
+}
+
 /** Muda as UV de uma caixa (medidas em unidades) para a textura ter `ladoTextura` metros, sem esticar. */
 function uvEmMetros(geo: THREE.BoxGeometry, w: number, h: number, d: number, ladoTextura: number): THREE.BoxGeometry {
   const uv = geo.attributes.uv;
@@ -62,8 +77,16 @@ export class Ambiente {
   private readonly matLuz = mat(0x222222, { emissive: 0xffd9a0, emissiveIntensity: 0 });
   private readonly matJanelaAcesa = mat(0x222222, { emissive: 0xffd8a0, emissiveIntensity: 0, roughness: 0.4 });
   private readonly matPoca: THREE.MeshBasicMaterial;
-  private readonly carros: { o: THREE.Object3D; v: number }[] = [];
+  private readonly carros: { o: THREE.Object3D; v: number; eixo: 'x' | 'z'; min: number; max: number }[] = [];
   private readonly arvores: THREE.Object3D[] = [];
+  /** Zonas onde não se planta nada (escritório, ruas, casas, cidade). */
+  private readonly ocupado: Retangulo[] = [];
+  private variantes: { t: Tree; alturaModelo: number }[] = [];
+  private arbusto!: { t: Tree; alturaModelo: number };
+  private readonly relvas: THREE.InstancedMesh[] = [];
+  private readonly uTempoRelva = { value: 0 };
+  /** Rua do bairro de casas (ao longo de z), do outro lado do escritório. */
+  private readonly ruaBairro: number;
   /** Árvores geradas (fora da cena): animam o vento das folhas, que todas as cópias partilham. */
   private readonly especies: Tree[] = [];
   private readonly dirSol = new THREE.Vector3();
@@ -92,11 +115,12 @@ export class Ambiente {
     this.cenaCeu.add(new Sky()); // cópia só para gerar a luz do ambiente
     cena.fog = new THREE.FogExp2(NEVOA_DIA.getHex(), 0.0065);
 
-    this.hemi = new THREE.HemisphereLight(0xdfeaff, 0x4a5a32, 0.25);
+    // Céu azulado por cima: as sombras ficam claras e frias em vez de cinzentas
+    this.hemi = new THREE.HemisphereLight(0xc8dcff, 0x6a7a3c, 0.25);
     cena.add(this.hemi);
     this.sol = new THREE.DirectionalLight(0xfff2dc, 3);
     this.sol.castShadow = true;
-    this.sol.shadow.mapSize.set(4096, 4096);
+    this.sol.shadow.mapSize.set(2048, 2048);
     const c = this.sol.shadow.camera;
     c.left = c.bottom = -21;
     c.right = c.top = 21;
@@ -104,7 +128,7 @@ export class Ambiente {
     c.far = 160;
     this.sol.shadow.bias = -0.00025;
     this.sol.shadow.normalBias = 0.02;
-    this.sol.shadow.radius = 2.5;
+    this.sol.shadow.radius = 4; // contornos macios, de desenho animado
     this.sol.target.position.copy(this.centro);
     cena.add(this.sol, this.sol.target);
     // Luz do escritório à noite (de cima, sem sombras)
@@ -126,10 +150,71 @@ export class Ambiente {
       map: new THREE.CanvasTexture(poca), transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending,
     });
 
+    this.ruaBairro = largura + 22;
+    const grande = 1e4;
+    this.ocupado.push(
+      { x0: -2.8, x1: largura + 2, z0: -2.8, z1: altura + 2, relva: true }, // jardim do escritório (sem árvores)
+      { // laje do escritório
+        x0: this.centro.x - (largura + 0.5) / 2, x1: this.centro.x + (largura + 0.5) / 2,
+        z0: this.centro.z - (altura + 0.5) / 2, z1: this.centro.z + (altura + 0.5) / 2, relva: false,
+      },
+      { x0: -2.8, x1: this.centro.x - (largura + 0.5) / 2, z0: entrada.z - 0.6, z1: entrada.z + 0.6, relva: false }, // caminho da entrada
+      { x0: -2.8, x1: -2.2, z0: -grande, z1: grande, relva: true }, // sebe
+      { x0: -grande, x1: -11.5, z0: -grande, z1: grande, relva: false }, // cidade
+    );
+    for (const x of [RUA_X, this.ruaBairro])
+      this.ocupado.push({ x0: x - MEIA_RUA_PASSEIO - 0.4, x1: x + MEIA_RUA_PASSEIO + 0.4, z0: -grande, z1: grande, relva: false });
+    this.ocupado.push({ x0: -grande, x1: grande, z0: RUA_T_Z - MEIA_RUA_PASSEIO - 0.4, z1: RUA_T_Z + MEIA_RUA_PASSEIO + 0.4, relva: false });
+
     this.criarTerreno(largura, altura, entrada);
     this.criarEstrada(altura, entrada);
-    this.criarArvores(largura, altura);
+    this.criarArvores(altura);
+    this.criarBairro();
+    this.plantarArvoresSoltas(largura, altura);
     this.criarCidade();
+    this.criarRelva();
+  }
+
+  /** Árvores espalhadas pelos relvados à volta, longe das ruas e das casas. */
+  private plantarArvoresSoltas(largura: number, altura: number): void {
+    let n = 0;
+    for (let i = 0; i < 3000 && n < 80; i++) {
+      const x = -11 + hash(i * 3 + 1) * (this.ruaBairro + 40);
+      const z = -45 + hash(i * 3 + 2) * (altura + 90);
+      if (!this.livre(x, z, 1.2)) continue;
+      n++;
+      this.plantarArvore(i, x, z, (7 + hash(i * 3 + 3) * 6) * M);
+    }
+    void largura;
+  }
+
+  /** Se (x, z) está longe (pelo menos `margem`) de tudo o que está construído. */
+  private livre(x: number, z: number, margem: number, paraRelva = false): boolean {
+    for (const r of this.ocupado) {
+      if (paraRelva && r.relva) continue;
+      if (x > r.x0 - margem && x < r.x1 + margem && z > r.z0 - margem && z < r.z1 + margem) return false;
+    }
+    return true;
+  }
+
+  private plantarArvore(i: number, x: number, z: number, alvo: number): void {
+    const v = this.variantes[i % this.variantes.length];
+    const a = new THREE.Group();
+    a.add(v.t.branchesMesh.clone(), v.t.leavesMesh.clone());
+    a.scale.setScalar(alvo / v.alturaModelo);
+    a.rotation.y = hash(i + 5) * Math.PI * 2;
+    a.position.set(x, -0.12, z);
+    this.cena.add(a);
+    this.arvores.push(a);
+  }
+
+  private plantarArbusto(x: number, z: number, alvo: number): void {
+    const b = new THREE.Group();
+    b.add(this.arbusto.t.branchesMesh.clone(), this.arbusto.t.leavesMesh.clone());
+    b.scale.setScalar(alvo / this.arbusto.alturaModelo);
+    b.rotation.y = hash(x * 13 + z * 7) * 6;
+    b.position.set(x, -0.12, z);
+    this.cena.add(b);
   }
 
   set sombras(v: boolean) {
@@ -138,13 +223,17 @@ export class Ambiente {
 
   /** Resolução das sombras e número de árvores visíveis conforme a qualidade. */
   qualidade(q: Qualidade): void {
-    const n = q === 'alta' ? 4096 : q === 'media' ? 2048 : 1024;
+    // Com sombras suaves (raio grande), 2048 chega para os 42 m que a câmara de sombras cobre.
+    const n = q === 'baixa' ? 1024 : 2048;
     if (this.sol.shadow.mapSize.x !== n) {
       this.sol.shadow.mapSize.set(n, n);
       this.sol.shadow.map?.dispose();
       this.sol.shadow.map = null;
     }
     this.arvores.forEach((a, i) => (a.visible = q !== 'baixa' || i % 2 === 0));
+    // Relva: as instâncias estão baralhadas, por isso mostrar só as primeiras tira-as por igual
+    const fracao = q === 'baixa' ? 0.3 : q === 'media' ? 0.65 : 1;
+    for (const r of this.relvas) r.count = Math.floor((r.userData.total as number) * fracao);
   }
 
   // -------------------------------------------------------------------------
@@ -152,7 +241,7 @@ export class Ambiente {
   private criarTerreno(largura: number, altura: number, entrada: { x: number; z: number }): void {
     const relva = new THREE.Mesh(
       new THREE.PlaneGeometry(320, 320).rotateX(-Math.PI / 2),
-      texturaNoMundo(materialPBR('leafy_grass', 1, { color: 0xc4d6a0, roughness: 1 }), 0.6, 0.55),
+      texturaNoMundo(materialPBR('leafy_grass', 1, { color: 0xb4e07c, roughness: 1 }), 0.6, 0.55),
     );
     relva.position.set(this.centro.x, -0.12, this.centro.z);
     relva.receiveShadow = true;
@@ -192,41 +281,93 @@ export class Ambiente {
     }
   }
 
+  private matsRua?: { asfalto: THREE.Material; risco: THREE.Material; passeio: THREE.Material; lancil: THREE.Material };
+
+  /**
+   * Uma rua com asfalto, traço ao centro, linhas nas bermas e passeios com lancil, ao longo de `eixo`,
+   * de `de` a `ate`. Em `cortes` cruzam ruas perpendiculares: aí o passeio e as linhas param.
+   * `cruza`: esta rua passa por cima das outras (só o asfalto para, para não se sobrepor).
+   */
+  private criarRua(eixo: 'x' | 'z', pos: number, de: number, ate: number, cortes: number[], cruza: boolean): void {
+    this.matsRua ??= {
+      asfalto: texturaNoMundo(materialPBR('asphalt_02', 1, { color: 0x8a8a8a, roughness: 1 }), 0.55, 0.25),
+      risco: mat(0xf2f2ee, { roughness: 0.7 }),
+      passeio: texturaNoMundo(materialPBR('pavement_04', 1), 0.54, 0.2),
+      lancil: mat(0xa7a7a2, { roughness: 0.85 }),
+    };
+    const m = this.matsRua;
+    const troços = (folga: number): [number, number][] => {
+      const r: [number, number][] = [];
+      let a = de;
+      for (const c of [...cortes].sort((p, q) => p - q)) {
+        if (c - folga > a) r.push([a, c - folga]);
+        a = Math.max(a, c + folga);
+      }
+      if (ate > a) r.push([a, ate]);
+      return r;
+    };
+    // Peça ao longo da rua: `lateral` é o desvio para o lado, `larg` a largura e `alt` a espessura (0 = plano)
+    const peca = (a: number, b: number, lateral: number, larg: number, y: number, alt: number, material: THREE.Material, sombra = true) => {
+      const comp = b - a;
+      const geo = alt > 0
+        ? eixo === 'z' ? new THREE.BoxGeometry(larg, alt, comp) : new THREE.BoxGeometry(comp, alt, larg)
+        : (eixo === 'z' ? new THREE.PlaneGeometry(larg, comp) : new THREE.PlaneGeometry(comp, larg)).rotateX(-Math.PI / 2);
+      const o = new THREE.Mesh(geo, material);
+      const meio = (a + b) / 2;
+      if (eixo === 'z') o.position.set(pos + lateral, y, meio);
+      else o.position.set(meio, y, pos + lateral);
+      o.receiveShadow = sombra;
+      this.cena.add(o);
+    };
+    for (const [a, b] of cruza ? troços(MEIA_RUA) : [[de, ate] as [number, number]])
+      peca(a, b, 0, MEIA_RUA * 2, cruza ? -0.107 : -0.105, 0, m.asfalto);
+    // Traço descontínuo ao centro (instanciado) e linhas contínuas nas bermas
+    const tracos: THREE.Matrix4[] = [];
+    const mtx = new THREE.Matrix4();
+    for (const [a, b] of troços(MEIA_RUA_PASSEIO))
+      for (let t = a + 1; t < b - 1; t += 3.6) {
+        if (eixo === 'z') mtx.makeTranslation(pos, -0.1, t);
+        else mtx.makeRotationY(Math.PI / 2).setPosition(t, -0.1, pos);
+        tracos.push(mtx.clone());
+      }
+    const im = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.07, 1.6).rotateX(-Math.PI / 2), m.risco, tracos.length);
+    tracos.forEach((t, k) => im.setMatrixAt(k, t));
+    im.receiveShadow = true;
+    this.cena.add(im);
+    for (const [a, b] of troços(MEIA_RUA))
+      for (const bx of [-1.9, 1.9]) peca(a, b, bx, 0.06, -0.1, 0, m.risco, false);
+    // Passeios (calçada) com lancil de betão. Na rua que cruza, o passeio dobra as esquinas.
+    for (const [a, b] of troços(cruza ? MEIA_RUA : MEIA_RUA_PASSEIO))
+      for (const lado of [1, -1]) {
+        peca(a, b, lado * 2.75, 1.3, -0.07, 0.1, m.passeio);
+        peca(a, b, lado * 2.09, 0.09, -0.065, 0.11, m.lancil);
+      }
+  }
+
+  /** Um carro a circular numa rua (ao longo de `eixo`), na faixa do seu sentido. */
+  private carroNaRua(eixo: 'x' | 'z', pos: number, min: number, max: number, i: number): void {
+    const CORES = [0x9b1b1b, 0x1f3a6e, 0xd8d8d8, 0x2b2d31, 0x6b7280, 0x0f4c3a, 0xb45309, 0xf2f2f2, 0x2f7fb8, 0xe0b23a];
+    const g = this.criarCarro(CORES[(i * 7) % CORES.length], i);
+    const sentido = i % 2 ? 1 : -1;
+    const ao = min + hash(i + 40) * (max - min);
+    if (eixo === 'z') {
+      g.position.set(pos + sentido * 1.0, -0.1, ao);
+      g.rotation.y = sentido > 0 ? 0 : Math.PI;
+    } else {
+      g.position.set(ao, -0.1, pos - sentido * 1.0);
+      g.rotation.y = sentido > 0 ? Math.PI / 2 : -Math.PI / 2;
+    }
+    this.cena.add(g);
+    this.carros.push({ o: g, v: sentido * (4.5 + hash(i) * 3.5), eixo, min, max });
+  }
+
   private criarEstrada(altura: number, entrada: { x: number; z: number }): void {
-    const x = -6.5;
-    const asfalto = texturaNoMundo(materialPBR('asphalt_02', 1, { color: 0x8a8a8a, roughness: 1 }), 0.55, 0.25);
-    const estrada = new THREE.Mesh(new THREE.PlaneGeometry(4.2, 320).rotateX(-Math.PI / 2), asfalto);
-    estrada.position.set(x, -0.105, this.centro.z);
-    estrada.receiveShadow = true;
-    this.cena.add(estrada);
-    // Traço descontínuo ao centro e linhas contínuas nas bermas
-    const matRisco = mat(0xf2f2ee, { roughness: 0.7 });
-    const geoRisco = new THREE.PlaneGeometry(0.07, 1.6).rotateX(-Math.PI / 2);
-    for (let z = -140; z < 160; z += 3.6) {
-      const r = new THREE.Mesh(geoRisco, matRisco);
-      r.position.set(x, -0.1, z);
-      r.receiveShadow = true;
-      this.cena.add(r);
-    }
-    for (const bx of [-1.9, 1.9]) {
-      const l = new THREE.Mesh(new THREE.PlaneGeometry(0.06, 320).rotateX(-Math.PI / 2), matRisco);
-      l.position.set(x + bx, -0.1, this.centro.z);
-      this.cena.add(l);
-    }
-    // Passeios (calçada) com lancil de betão
-    const matPasseio = texturaNoMundo(materialPBR('pavement_04', 1), 0.54, 0.2);
-    const matLancil = mat(0xa7a7a2, { roughness: 0.85 });
-    for (const lado of [1, -1]) {
-      const px = x + lado * 2.75;
-      const passeio = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.1, 320), matPasseio);
-      passeio.position.set(px, -0.07, this.centro.z);
-      passeio.receiveShadow = true;
-      this.cena.add(passeio);
-      const lancil = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.11, 320), matLancil);
-      lancil.position.set(px - lado * 0.66, -0.065, this.centro.z);
-      lancil.receiveShadow = true;
-      this.cena.add(lancil);
-    }
+    const x = RUA_X;
+    const z0 = this.centro.z - 160;
+    const z1 = this.centro.z + 160;
+    this.criarRua('z', RUA_X, z0, z1, [RUA_T_Z], false);
+    this.criarRua('z', this.ruaBairro, z0, z1, [RUA_T_Z], false);
+    this.criarRua('x', RUA_T_Z, -160, 160, [RUA_X, this.ruaBairro], true);
     // Candeeiros clássicos (Poly Haven), com poça de luz no chão à noite
     const vidros: THREE.Material[] = [];
     const modelo = R.modelos.candeeiro;
@@ -249,6 +390,24 @@ export class Ambiente {
       p.renderOrder = 2;
       this.cena.add(p);
     }
+    // Candeeiros na rua do bairro (do lado de cá) e na transversal
+    const candeeiro = (cx: number, cz: number, rot: number, px: number, pz: number) => {
+      const c = modelo.clone();
+      c.scale.setScalar((3.9 * M) / tamanho.y);
+      c.position.set(cx, -0.02, cz);
+      c.rotation.y = rot;
+      this.cena.add(c);
+      const p = new THREE.Mesh(geoPoca, this.matPoca);
+      p.position.set(px, -0.095, pz);
+      p.renderOrder = 2;
+      this.cena.add(p);
+    };
+    const xb = this.ruaBairro;
+    for (let z = RUA_T_Z - 40; z <= altura + 40; z += 11) {
+      if (Math.abs(z - RUA_T_Z) < 5) continue;
+      candeeiro(xb - 2.3, z, -Math.PI / 2, xb - 1.9, z);
+    }
+    for (let cx = RUA_X + 9; cx < xb - 5; cx += 11) candeeiro(cx, RUA_T_Z + 2.3, Math.PI, cx, RUA_T_Z + 1.9);
     // O vidro dos candeeiros passa a emitir luz (o mesmo material serve para todos)
     for (const v of vidros) {
       const m = v as THREE.MeshStandardMaterial;
@@ -256,16 +415,10 @@ export class Ambiente {
       m.emissiveIntensity = 0;
       this.matLuzes.push(m);
     }
-    // Carros
-    const CORES = [0x9b1b1b, 0x1f3a6e, 0xd8d8d8, 0x2b2d31, 0x6b7280, 0x0f4c3a, 0xb45309, 0xf2f2f2];
-    for (let i = 0; i < 7; i++) {
-      const g = this.criarCarro(CORES[i % CORES.length], i);
-      const sentido = i % 2 ? 1 : -1;
-      g.position.set(x + sentido * 1.0, -0.1, -120 + hash(i + 40) * 260);
-      g.rotation.y = sentido > 0 ? 0 : Math.PI;
-      this.cena.add(g);
-      this.carros.push({ o: g, v: sentido * (5 + hash(i) * 3) });
-    }
+    // Trânsito: na estrada principal, na rua do bairro e na transversal
+    for (let i = 0; i < 10; i++) this.carroNaRua('z', RUA_X, -130, 150, i);
+    for (let i = 10; i < 15; i++) this.carroNaRua('z', xb, -130, 150, i);
+    for (let i = 15; i < 22; i++) this.carroNaRua('x', RUA_T_Z, -150, 150, i);
     // Bancos de jardim na relva entre o passeio e o terreno, virados para a rua
     const banco = R.modelos.banco;
     if (banco) for (let z = -13; z <= altura + 12; z += 6) {
@@ -361,7 +514,7 @@ export class Ambiente {
     return g;
   }
 
-  private criarArvores(largura: number, altura: number): void {
+  private criarArvores(altura: number): void {
     // Poucas variantes geradas (ez-tree), muitas cópias: a geometria é partilhada.
     const especies = ['Ash Medium', 'Oak Medium', 'Aspen Medium', 'Ash Small', 'Oak Small', 'Pine Medium'];
     const variantes = especies.map((nome, k) => {
@@ -380,25 +533,8 @@ export class Ambiente {
     arvorePBR(arbusto);
     const alturaArbusto = new THREE.Box3().setFromObject(arbusto).getSize(new THREE.Vector3()).y;
 
-    let n = 0;
-    for (let i = 0; i < 500 && n < 42; i++) {
-      const x = -34 + hash(i * 3 + 1) * (largura + 70);
-      const z = -30 + hash(i * 3 + 2) * (altura + 60);
-      const dentro = x > -2.8 && x < largura + 2 && z > -2.8 && z < altura + 2;
-      const naEstrada = x > -10.5 && x < -2.2;
-      const naCidade = x < -11.5;
-      if (dentro || naEstrada || naCidade) continue;
-      n++;
-      const v = variantes[i % variantes.length];
-      const alvo = (7 + hash(i * 3 + 3) * 6) * M;
-      const a = new THREE.Group();
-      a.add(v.t.branchesMesh.clone(), v.t.leavesMesh.clone());
-      a.scale.setScalar(alvo / v.alturaModelo);
-      a.rotation.y = hash(i + 5) * Math.PI * 2;
-      a.position.set(x, -0.12, z);
-      this.cena.add(a);
-      this.arvores.push(a);
-    }
+    this.variantes = variantes;
+    this.arbusto = { t: arbusto, alturaModelo: alturaArbusto };
     // Sebe baixa ao longo do terreno (do lado de dentro do passeio)
     for (let z = -1.5; z <= altura + 0.5; z += 1.6) {
       const b = new THREE.Group();
@@ -409,6 +545,287 @@ export class Ambiente {
       this.cena.add(b);
     }
     this.especies.push(...variantes.map((v) => v.t), arbusto);
+  }
+
+  /**
+   * Bairro de moradias dos dois lados da rua do bairro: paredes em tons pastel, telhados de duas
+   * águas, portas, janelas com moldura, chaminés, caminhos, arbustos, árvores nos quintais e
+   * alguns carros estacionados à porta.
+   */
+  private criarBairro(): void {
+    const xb = this.ruaBairro;
+    const paredes = [0xf6e3c0, 0xdbe9f2, 0xf3d2c9, 0xe2efd3, 0xfff4d8, 0xe8ddf3, 0xf7f1e8].map((c) =>
+      materialPBR('painted_plaster_wall', 1, { color: c }),
+    );
+    const telhas = [0xb4553a, 0x8f3d2c, 0x5c6169, 0xa1603d, 0x6e4a3a].map((c) => mat(c, { roughness: 0.75 }));
+    const portasCor = [0x2f5d8a, 0x8a2f2f, 0x2f6b4a, 0x7a4b2e, 0xe0b23a].map((c) => mat(c, { roughness: 0.55 }));
+    const branco = mat(0xf7f6f2, { roughness: 0.6 });
+    const tijolo = materialPBR('brick_wall_001', 1, { roughness: 0.9 });
+    const cimento = texturaNoMundo(materialPBR('concrete_wall_006', 1, { color: 0xcfcac0 }), 0.5, 0.2);
+    const vidro = new THREE.MeshStandardMaterial({ color: 0x1a2431, metalness: 0.85, roughness: 0.08 });
+    const geoJanela = new THREE.BoxGeometry(0.04, 0.6, 0.55);
+    const geoMoldura = new THREE.BoxGeometry(0.03, 0.72, 0.67);
+    const janelas: THREE.Matrix4[] = [];
+    const acesas: THREE.Matrix4[] = [];
+    const molduras: THREE.Matrix4[] = [];
+    const mtx = new THREE.Matrix4();
+    const rotZ = new THREE.Matrix4().makeRotationY(Math.PI / 2);
+    // Janela numa fachada virada para ±x (normal = sinal) ou ±z
+    const janela = (x: number, y: number, z: number, viradaX: boolean, sinal: number, semente: number) => {
+      const off = sinal * 0.012;
+      (viradaX ? mtx.makeTranslation(x + off, y, z) : mtx.copy(rotZ).setPosition(x, y, z + off));
+      (hash(semente) < 0.45 ? acesas : janelas).push(mtx.clone());
+      (viradaX ? mtx.makeTranslation(x, y, z) : mtx.copy(rotZ).setPosition(x, y, z));
+      molduras.push(mtx.clone());
+    };
+
+    let i = 0;
+    for (const lado of [-1, 1])
+      for (let z = this.centro.z - 75; z < this.centro.z + 80; z += 9.5) {
+        i++;
+        if (Math.abs(z - RUA_T_Z) < 9) continue;
+        const s = i * 11 + (lado > 0 ? 500 : 0);
+        const w = 4.6 + hash(s + 1) * 1.8; // ao longo de z
+        const d = 4.4 + hash(s + 2) * 1.6; // ao longo de x
+        const pisos = hash(s + 3) < 0.55 ? 2 : 1;
+        const hp = 1.6;
+        const h = pisos * hp + 0.15;
+        const frente = xb + lado * (MEIA_RUA_PASSEIO + 3.2); // fachada da frente
+        const xc = frente + lado * (d / 2);
+        const y0 = -0.12;
+        const corpo = new THREE.Mesh(uvEmMetros(new THREE.BoxGeometry(d, h, w), d, h, w, 3), paredes[s % paredes.length]);
+        corpo.position.set(xc, y0 + h / 2, z);
+        corpo.castShadow = corpo.receiveShadow = true;
+        this.cena.add(corpo);
+        // Soco de tijolo à volta da base
+        const soco = new THREE.Mesh(uvEmMetros(new THREE.BoxGeometry(d + 0.06, 0.35, w + 0.06), d, 0.35, w, 3), tijolo);
+        soco.position.set(xc, y0 + 0.175, z);
+        soco.receiveShadow = true;
+        this.cena.add(soco);
+        // Telhado de duas águas (cumeeira ao longo de z), com beiral
+        const rh = d * (0.3 + hash(s + 4) * 0.12);
+        const forma = new THREE.Shape([
+          new THREE.Vector2(-(d / 2 + 0.3), 0), new THREE.Vector2(d / 2 + 0.3, 0), new THREE.Vector2(0, rh),
+        ]);
+        // Grupos da ExtrudeGeometry: 0 = topos (as empenas, da cor da parede), 1 = águas (telha)
+        const geoTelhado = new THREE.ExtrudeGeometry(forma, { depth: w + 0.02, bevelEnabled: false }).translate(0, 0, -(w + 0.02) / 2);
+        const telhado = new THREE.Mesh(geoTelhado, [paredes[s % paredes.length], telhas[(s >> 1) % telhas.length]]);
+        telhado.position.set(xc, y0 + h - 0.02, z);
+        telhado.castShadow = telhado.receiveShadow = true;
+        this.cena.add(telhado);
+        // Beirados: tábuas de telha um pouco mais compridas que a casa, por cima das águas
+        const comp = Math.hypot(d / 2 + 0.3, rh);
+        const incl = Math.atan2(rh, d / 2 + 0.3);
+        for (const lx of [-1, 1]) {
+          const agua = new THREE.Mesh(new THREE.BoxGeometry(comp + 0.08, 0.07, w + 0.5), telhas[(s >> 1) % telhas.length]);
+          agua.position.set(xc + (lx * (d / 2 + 0.3)) / 2, y0 + h - 0.02 + rh / 2 + 0.03, z);
+          agua.rotation.z = -lx * incl;
+          agua.castShadow = agua.receiveShadow = true;
+          this.cena.add(agua);
+        }
+        if (hash(s + 5) < 0.6) {
+          const ch = new THREE.Mesh(uvEmMetros(new THREE.BoxGeometry(0.4, 1.1, 0.4), 0.4, 1.1, 0.4, 3), tijolo);
+          ch.position.set(xc + lado * d * 0.2, y0 + h + rh * 0.55, z + w * 0.28);
+          ch.castShadow = true;
+          this.cena.add(ch);
+        }
+        // Porta (com degrau) e janelas na frente
+        const zPorta = z - w * 0.22;
+        const porta = new THREE.Mesh(new THREE.BoxGeometry(0.06, 1.15, 0.6), portasCor[s % portasCor.length]);
+        porta.position.set(frente - lado * 0.03, y0 + 0.2 + 0.575, zPorta);
+        this.cena.add(porta);
+        const degrau = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.2, 0.95), cimento);
+        degrau.position.set(frente - lado * 0.25, y0 + 0.1, zPorta);
+        degrau.receiveShadow = true;
+        this.cena.add(degrau);
+        const fx = frente - lado * 0.015;
+        for (let p = 0; p < pisos; p++) {
+          const y = y0 + 0.95 + p * hp;
+          const zs = p === 0 ? [z + w * 0.12, z + w * 0.32] : [z - w * 0.25, z, z + w * 0.25];
+          zs.forEach((jz, k) => janela(fx, y, jz, true, -lado, s * 7 + p * 3 + k));
+          for (const lz of [-1, 1]) janela(xc, y, z + lz * (w / 2 + 0.015), false, lz, s * 5 + p + lz);
+        }
+        // Caminho até ao passeio, entrada da garagem e arbustos no jardim da frente
+        const passeioX = xb + lado * MEIA_RUA_PASSEIO;
+        const caminho = new THREE.Mesh(new THREE.PlaneGeometry(Math.abs(frente - passeioX), 0.7).rotateX(-Math.PI / 2), cimento);
+        caminho.position.set((frente + passeioX) / 2, -0.112, zPorta);
+        caminho.receiveShadow = true;
+        this.cena.add(caminho);
+        const zGaragem = z + w / 2 + 1.1;
+        const garagem = new THREE.Mesh(new THREE.PlaneGeometry(Math.abs(frente - passeioX) + d * 0.6, 1.6).rotateX(-Math.PI / 2), cimento);
+        garagem.position.set((frente + passeioX) / 2 + lado * d * 0.3, -0.113, zGaragem);
+        garagem.receiveShadow = true;
+        this.cena.add(garagem);
+        if (hash(s + 6) < 0.45) {
+          const carro = this.criarCarro([0x9b1b1b, 0x1f3a6e, 0xd8d8d8, 0x2b2d31, 0x2f7fb8][s % 5], s + 300);
+          carro.position.set(frente - lado * 1.35, -0.1, zGaragem);
+          carro.rotation.y = lado > 0 ? Math.PI / 2 : -Math.PI / 2;
+          this.cena.add(carro);
+        }
+        for (const bz of [zPorta - 0.75, zPorta + 0.75, z + w * 0.22])
+          this.plantarArbusto(frente - lado * 0.55, bz, (0.7 + hash(bz * 3) * 0.35) * M);
+        // Cerca baixa de madeira branca ao longo do passeio
+        const cerca = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.5, w * 0.6), branco);
+        cerca.position.set(passeioX + lado * 0.15, y0 + 0.25, z + w * 0.2);
+        cerca.castShadow = true;
+        this.cena.add(cerca);
+        // Árvore no quintal das traseiras
+        if (hash(s + 7) < 0.8)
+          this.plantarArvore(s, xc + lado * (d / 2 + 2.4 + hash(s + 8) * 3), z + (hash(s + 9) - 0.5) * 5, (6 + hash(s + 10) * 5) * M);
+        // Nada de árvores na casa e no jardim da frente; a relva cresce no jardim mas não na casa
+        const xs = [passeioX, xc + lado * (d / 2 + 0.6)];
+        this.ocupado.push({ x0: Math.min(...xs), x1: Math.max(...xs), z0: z - w / 2 - 0.6, z1: zGaragem + 0.9, relva: true });
+        const xsCasa = [frente, xc + lado * (d / 2 + 0.3)];
+        this.ocupado.push({ x0: Math.min(...xsCasa) - 0.3, x1: Math.max(...xsCasa), z0: z - w / 2 - 0.3, z1: z + w / 2 + 0.3, relva: false });
+        const xsGaragem = [passeioX, frente + lado * d * 0.6];
+        this.ocupado.push({ x0: Math.min(...xsGaragem), x1: Math.max(...xsGaragem), z0: zGaragem - 0.8, z1: zGaragem + 0.8, relva: false });
+        this.ocupado.push({ x0: Math.min(frente, passeioX), x1: Math.max(frente, passeioX), z0: zPorta - 0.35, z1: zPorta + 0.35, relva: false });
+      }
+    for (const [lista, material] of [[janelas, vidro], [acesas, this.matJanelaAcesa]] as const) {
+      const im = new THREE.InstancedMesh(geoJanela, material, lista.length);
+      lista.forEach((mm, k) => im.setMatrixAt(k, mm));
+      this.cena.add(im);
+    }
+    const imM = new THREE.InstancedMesh(geoMoldura, branco, molduras.length);
+    molduras.forEach((mm, k) => imM.setMatrixAt(k, mm));
+    this.cena.add(imM);
+  }
+
+  /**
+   * Tufos de relva (com vento) e flores de várias cores espalhados pelos relvados. Tudo instanciado:
+   * duas chamadas de desenho para milhares de tufos.
+   */
+  private criarRelva(): void {
+    const mtx = new THREE.Matrix4();
+    // Tufo: 9 folhas em leque largo, escuras em baixo (da cor do chão) e claras na ponta. Os tufos
+    // tocam-se uns nos outros e formam um tapete contínuo.
+    const pos: number[] = [];
+    const cor: number[] = [];
+    const base = new THREE.Color(0x4d7a26);
+    const ponta = new THREE.Color(0xa6d85c);
+    for (let k = 0; k < 9; k++) {
+      const ang = (k / 9) * Math.PI * 2 + hash(k + 70) * 0.7;
+      const r = 0.03 + hash(k + 80) * 0.16;
+      const cx = Math.cos(ang) * r;
+      const cz = Math.sin(ang) * r;
+      const h = 0.12 + hash(k + 90) * 0.1;
+      const lean = 0.05 + hash(k + 95) * 0.06;
+      const px = -Math.sin(ang) * 0.04;
+      const pz = Math.cos(ang) * 0.04;
+      pos.push(cx - px, 0, cz - pz, cx + px, 0, cz + pz, cx + Math.cos(ang) * lean, h, cz + Math.sin(ang) * lean);
+      cor.push(base.r, base.g, base.b, base.r, base.g, base.b, ponta.r, ponta.g, ponta.b);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(cor, 3));
+    // Normais para cima: a relva fica iluminada como o chão, sem folhas pretas de costas para o sol
+    geo.setAttribute('normal', new THREE.Float32BufferAttribute(new Array((pos.length / 3) * 3).fill(0).map((_, j) => (j % 3 === 1 ? 1 : 0)), 3));
+    const uTempo = this.uTempoRelva;
+    const vento = (m: THREE.MeshStandardMaterial, forca: number) => {
+      m.onBeforeCompile = (sh) => {
+        sh.uniforms.uTempo = uTempo;
+        sh.vertexShader = sh.vertexShader
+          .replace('#include <common>', '#include <common>\nuniform float uTempo;')
+          .replace('#include <begin_vertex>', `#include <begin_vertex>
+  vec2 fase = vec2(instanceMatrix[3][0], instanceMatrix[3][2]);
+  float o = sin(uTempo * 1.7 + fase.x * 0.35 + fase.y * 0.22) + 0.5 * sin(uTempo * 3.1 + fase.y * 0.6);
+  transformed.xz += vec2(0.7, 0.4) * o * ${forca.toFixed(3)} * position.y;`);
+      };
+    };
+    const matRelva = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.95 });
+    vento(matRelva, 0.35);
+
+    // Grelha com desvio aleatório (sem falhas nem amontoados): densa até 48 de raio do escritório,
+    // e mais rala até à orla (lá ao longe a textura do chão chega).
+    const xMin = -11.5;
+    const xMax = this.ruaBairro + 24;
+    const zMin = this.centro.z - 60;
+    const zMax = this.centro.z + 60;
+    const PASSO = 0.34;
+    const pontos: { x: number; z: number; s: number }[] = [];
+    let s = 0;
+    for (let gx = xMin; gx < xMax; gx += PASSO)
+      for (let gz = zMin; gz < zMax; gz += PASSO) {
+        s++;
+        const dist = Math.hypot(gx - this.centro.x, gz - this.centro.z);
+        if (dist > 48 && hash(s * 3 + 1) > Math.max(0.12, 1 - (dist - 48) / 14)) continue;
+        const x = gx + (hash(s * 3 + 2) - 0.5) * PASSO;
+        const z = gz + (hash(s * 3 + 3) - 0.5) * PASSO;
+        if (this.livre(x, z, 0.08, true)) pontos.push({ x, z, s });
+      }
+    // Baralha, para que mostrar só as primeiras N (qualidade baixa) as tire por igual de todo o lado
+    for (let k = pontos.length - 1; k > 0; k--) {
+      const j = Math.floor(hash(k * 7 + 5) * (k + 1));
+      [pontos[k], pontos[j]] = [pontos[j], pontos[k]];
+    }
+    const sorteio = (seed: number) => {
+      const x = xMin + hash(seed * 13 + 1) * (xMax - xMin);
+      const z = zMin + hash(seed * 13 + 2) * (zMax - zMin);
+      const dist = Math.hypot(x - this.centro.x, z - this.centro.z);
+      return { x, z, aceite: hash(seed * 13 + 3) < Math.max(0.25, 1 - dist / 70) };
+    };
+    const N = pontos.length;
+    const tufos = new THREE.InstancedMesh(geo, matRelva, N);
+    const q = new THREE.Quaternion();
+    const e = new THREE.Vector3();
+    const p = new THREE.Vector3();
+    const up = new THREE.Vector3(0, 1, 0);
+    const c = new THREE.Color();
+    let n = 0;
+    for (const pt of pontos) {
+      const esc = 0.85 + hash(pt.s * 5 + 1) * 0.45;
+      q.setFromAxisAngle(up, hash(pt.s * 5 + 2) * Math.PI * 2);
+      mtx.compose(p.set(pt.x, -0.12, pt.z), q, e.set(esc, esc * (0.7 + hash(pt.s * 5 + 3) * 0.6), esc));
+      tufos.setMatrixAt(n, mtx);
+      // Variação suave de tom em manchas largas (como num relvado verdadeiro) e um pouco por tufo
+      const mancha = Math.sin(pt.x * 0.21 + Math.sin(pt.z * 0.13) * 2) * 0.5 + 0.5;
+      tufos.setColorAt(n, c.setHSL(0.2 + mancha * 0.08 + hash(pt.s * 5 + 4) * 0.03, 0.35, 0.8 + mancha * 0.06 + hash(pt.s * 5 + 4) * 0.06));
+      n++;
+    }
+    tufos.count = n;
+    tufos.userData.total = n;
+    tufos.receiveShadow = true;
+    tufos.frustumCulled = false;
+    this.cena.add(tufos);
+    this.relvas.push(tufos);
+
+    // Flores: pequenos canteiros espontâneos de 5 a 12 flores da mesma cor
+    const CORES_FLOR = [0xffffff, 0xffd23f, 0xff6fa8, 0xb07cff, 0xff5a4a, 0x6fb8ff, 0xffa53f];
+    const geoFlor = new THREE.IcosahedronGeometry(0.055, 0).translate(0, 0.17, 0);
+    const caule = new THREE.CylinderGeometry(0.008, 0.008, 0.17, 3).translate(0, 0.085, 0);
+    const matFlor = new THREE.MeshStandardMaterial({ roughness: 0.6, flatShading: true });
+    vento(matFlor, 0.25);
+    const matCaule = new THREE.MeshStandardMaterial({ color: 0x4f7f2a, roughness: 0.9 });
+    vento(matCaule, 0.25);
+    const MAX_FLORES = 1600;
+    const flores = new THREE.InstancedMesh(geoFlor, matFlor, MAX_FLORES);
+    const caules = new THREE.InstancedMesh(caule, matCaule, MAX_FLORES);
+    let f = 0;
+    for (let seed = 1; f < MAX_FLORES - 12 && seed < 4000; seed++) {
+      const r = sorteio(seed + 1000);
+      if (!r.aceite) continue;
+      const corF = CORES_FLOR[Math.floor(hash(seed + 0.41) * CORES_FLOR.length)];
+      const quantas = 5 + Math.floor(hash(seed + 0.43) * 8);
+      for (let k = 0; k < quantas; k++) {
+        const fx = r.x + (hash(seed * 3 + k) - 0.5) * 1.4;
+        const fz = r.z + (hash(seed * 5 + k) - 0.5) * 1.4;
+        if (!this.livre(fx, fz, 0.15, true)) continue;
+        const esc = 0.5 + hash(seed + k * 0.1) * 0.3;
+        mtx.compose(p.set(fx, -0.12, fz), q.identity(), e.set(esc, esc, esc));
+        flores.setMatrixAt(f, mtx);
+        caules.setMatrixAt(f, mtx);
+        flores.setColorAt(f, c.set(corF).offsetHSL(0, 0, (hash(seed + k) - 0.5) * 0.1));
+        f++;
+      }
+    }
+    for (const im of [flores, caules]) {
+      im.count = f;
+      im.userData.total = f;
+      im.receiveShadow = true;
+      im.frustumCulled = false;
+      this.cena.add(im);
+      this.relvas.push(im);
+    }
   }
 
   private criarCidade(): void {
@@ -425,13 +842,17 @@ export class Ambiente {
     const janelas: THREE.Matrix4[] = [];
     const acesas: THREE.Matrix4[] = [];
     const mtx = new THREE.Matrix4();
-    for (let i = 0; i < 20; i++) {
+    // Duas filas: a da frente, virada para a estrada, e uma de prédios mais altos atrás
+    for (let i = 0; i < 44; i++) {
+      const fila = i < 22 ? 0 : 1;
+      const k = i % 22;
       const w = 3.4 + hash(i + 200) * 3;
       const d = 4.5 + hash(i + 300) * 3.5;
-      const pisos = 2 + Math.floor(hash(i + 400) * 6);
+      const pisos = fila === 0 ? 2 + Math.floor(hash(i + 400) * 6) : 5 + Math.floor(hash(i + 400) * 9);
       const h = pisos * 1.75 + 0.4;
-      const x = -14.2 - w / 2 - hash(i + 500) * 6;
-      const z = -44 + i * 7.2 + hash(i + 600) * 1.5;
+      const x = fila === 0 ? -14.2 - w / 2 - hash(i + 500) * 6 : -30 - w / 2 - hash(i + 500) * 8;
+      const z = -58 + k * 7.6 + hash(i + 600) * 1.5 + fila * 3.5;
+      if (Math.abs(z - RUA_T_Z) < d / 2 + MEIA_RUA_PASSEIO + 0.6) continue;
       const corpo = new THREE.Mesh(uvEmMetros(new THREE.BoxGeometry(w, h, d), w, h, d, 3), fachadas[i % fachadas.length]);
       corpo.position.set(x, h / 2 - 0.12, z);
       corpo.castShadow = corpo.receiveShadow = true;
@@ -497,7 +918,7 @@ export class Ambiente {
       this.sol.intensity = 0.35;
     }
     // De noite o céu não dá luz de ambiente: o hemisfério faz de luar difuso e luz da cidade.
-    this.hemi.intensity = 0.3 - 0.08 * dia;
+    this.hemi.intensity = 0.3 + 0.25 * dia;
     this.interior.intensity = (1 - dia) * 0.75;
     this.interiorDifusa.intensity = (1 - dia) * 0.55;
     const luzes = 1 - THREE.MathUtils.smoothstep(elev, -0.02, 0.14);
@@ -531,10 +952,12 @@ export class Ambiente {
     }
 
     for (const c of this.carros) {
-      c.o.position.z += c.v * dt;
-      if (c.o.position.z > 150) c.o.position.z = -130;
-      if (c.o.position.z < -130) c.o.position.z = 150;
+      const p = c.o.position;
+      p[c.eixo] += c.v * dt;
+      if (p[c.eixo] > c.max) p[c.eixo] = c.min;
+      if (p[c.eixo] < c.min) p[c.eixo] = c.max;
     }
+    this.uTempoRelva.value = this.tempo;
     for (const e of this.especies) e.update(this.tempo);
   }
 }

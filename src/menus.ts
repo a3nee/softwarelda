@@ -1,6 +1,6 @@
 // Menus em ecrã inteiro: principal, nova empresa, pausa, definições, como jogar e conquistas.
 import { CONQUISTAS, DIFICULDADES, DECORACAO, ECON, euros, OBJETOS, LISTA_OBJETOS, type Dificuldade, type OpcoesJogo } from './sim.ts';
-import type { Definicoes, Qualidade } from './definicoes.ts';
+import { LIMITES_FPS, type Definicoes, type Qualidade } from './definicoes.ts';
 import { ic } from './icones.ts';
 
 export type Ecra = 'principal' | 'novo' | 'pausa' | 'definicoes' | 'ajuda' | 'conquistas';
@@ -83,6 +83,9 @@ export class Menus {
     } else if (b.dataset.qual) {
       this.acoes.mudarDefinicoes({ ...this.acoes.definicoes(), qualidade: b.dataset.qual as Qualidade });
       this.raiz.querySelectorAll('[data-qual]').forEach((o) => o.classList.toggle('ativo', o === b));
+    } else if (b.dataset.fps) {
+      this.acoes.mudarDefinicoes({ ...this.acoes.definicoes(), fpsMax: Number(b.dataset.fps) });
+      this.raiz.querySelectorAll('[data-fps]').forEach((o) => o.classList.toggle('ativo', o === b));
     } else if (a === 'continuar') this.acoes.continuar();
     else if (a === 'fundar') this.fundar();
     else if (a === 'jogo') this.acoes.voltarAoJogo();
@@ -99,7 +102,7 @@ export class Menus {
     if (!k) return;
     const d = { ...this.acoes.definicoes() };
     if (k === 'volume') d.volume = Number(i.value) / 100;
-    else if (k !== 'qualidade') d[k] = i.checked;
+    else if (k !== 'qualidade' && k !== 'fpsMax') d[k] = i.checked;
     this.acoes.mudarDefinicoes(d);
   }
 
@@ -178,6 +181,11 @@ export class Menus {
       <div class="grupo-def">
         <div class="rotulo">Gráficos</div>
         <div class="segmentos">${q('baixa', 'Baixa')}${q('media', 'Média')}${q('alta', 'Alta')}</div>
+        <div class="rotulo">Limite de FPS</div>
+        <div class="segmentos">${LIMITES_FPS.map(
+          (f) => `<button data-fps="${f}" class="${d.fpsMax === f ? 'ativo' : ''}">${f || 'Ilimitado'}</button>`,
+        ).join('')}</div>
+        ${int('mostrarFps', 'Mostrar FPS', 'Contador de imagens por segundo no canto do ecrã.')}
         ${int('sombras', 'Sombras', 'Sombras suaves do sol. Desliga se o jogo estiver lento.')}
         ${int('cicloDia', 'Ciclo dia/noite', 'O céu e as luzes mudam com as horas do jogo.')}
         ${int('indicadores', 'Indicadores de felicidade', 'O losango por cima de cada funcionário: verde, amarelo ou vermelho.')}
@@ -209,6 +217,11 @@ export class Menus {
         ${cartao(ic('megaphone'), 'Marketing', 'Durante o desenvolvimento, faz campanhas (redes sociais, imprensa, feira) para criar <b>expectativa</b>: as vendas do lançamento sobem nessa percentagem. Cada campanha soma menos quando já há muita.')}
         ${cartao(ic('building-2'), 'Mercado e avaliação', 'A empresa é avaliada pela caixa, pelas vendas futuras, projetos, equipa, marca e escritório. No separador <b>Mercado</b> vês o ranking contra 6 concorrentes, que crescem e lançam produtos todos os meses.')}
         ${cartao(ic('handshake'), 'Investidores', 'Com nível e avaliação suficientes, vende uma parte da empresa (ronda semente, série A, série B) por dinheiro já. Em troca, os investidores ficam com essa parte do lucro de cada mês.')}
+        ${cartao(ic('bug'), 'Bugs e patches', 'Os produtos lançados vão revelando <b>bugs</b> (mais se a qualidade ou os testes forem fracos, ou se houve horas extra). Os bugs cortam as vendas e a nota dos utilizadores. No separador <b>Produtos</b>, carrega em <b>Patch</b> para pôr a equipa livre a corrigi-los.')}
+        ${cartao(ic('star'), 'Novas versões', 'No novo projeto, escolhe <b>Nova versão de</b> um produto lançado do mesmo tipo («Nome 2», «v2»…). Os fãs trazem expectativa, mas os críticos comparam com o original: se a nova versão for pior, vende menos.')}
+        ${cartao(ic('flask-conical'), 'Investigação', 'Quem está sem projeto investiga a tecnologia escolhida no separador <b>Pesquisa</b> (ou paga a consultores). As tecnologias formam uma árvore e desbloqueiam funcionalidades novas e bónus.')}
+        ${cartao(ic('globe'), 'Eras tecnológicas', 'O mercado muda com os anos: Desktop, Web, Mobile, Cloud e IA. Cada era faz subir a procura de certos tipos e funcionalidades e torna outros antiquados.')}
+        ${cartao(ic('flame'), 'Horas extra', 'Num projeto, liga as <b>horas extra</b> para acabar mais depressa. A equipa cansa-se e fica menos feliz, há mais <b>baixas</b> (pessoas ausentes uns dias) e o produto sai com mais bugs.')}
       </div>
       <h3 class="titulo-atalhos">Atalhos</h3>
       <div class="atalhos">

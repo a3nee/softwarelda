@@ -13,7 +13,14 @@ import {
   HORA_INICIO, MELHORIAS, nivelDaEmpresa, pontosMelhoria, progressoNivel, rendaDe, serieDeLucro, temMelhoria,
   xpDeLancamento, avaliarEmpresa, rankingEmpresas, podeLevantar, levantarRonda, valorDaRonda, LISTA_RONDAS, RONDAS,
   LISTA_CAMPANHAS, CAMPANHAS, lancarCampanha, aceitarContrato, pagamentoDoContrato, DIAS_POR_MES,
-  type IdRonda, type IdCampanha, type Projeto, type OfertaContrato,
+  alternarCrunch, bonusSequela, candidatosSequela, nomeSequela, deBaixa, eraAtual, proximaEra, tendenciasEra, fatorEra,
+  escolherPesquisa, financiarPesquisa, funcionalidadeDisponivel, funcionalidadesDaTecnologia, iniciarManutencao, manutencaoDe,
+  LISTA_TECNOLOGIAS, TECNOLOGIAS, PESQUISA, pesquisaPorMes, podeInvestigar, temTecnologia, vendasComBugs, fatorBugs,
+  notaUtilizadores, BUGS, CRUNCH, velocidadeDe, procuraFuncionalidade,
+  TRACOS, relacoesDe, iniciarFormacao, FORMACAO, ausente, ESCRITORIOS, mudarEscritorio, dentroDoEscritorio,
+  comprarRival, precoAquisicao, AQUISICAO, entrarEmBolsa, podeEntrarEmBolsa, precoAcao, BOLSA, FEIRAS, irAFeira,
+  feirasDisponiveis,
+  type IdRonda, type IdCampanha, type Projeto, type OfertaContrato, type IdTecnologia, type DefEra,
   type Area, type IdMelhoria, type Aresta, type Competencias, type Estado, type Funcionario, type Mensagem, type Resultado,
   type TipoObjeto, type TipoSoftware,
 } from './sim.ts';
@@ -127,8 +134,12 @@ renderer.setPixelRatio(pixelRatio(def.qualidade));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 0.95;
+// As sombras são redesenhadas à mão (ver ciclo): a oclusão volta a desenhar a cena e, sozinho,
+// o renderer refazia o mapa de sombras em cada uma dessas passagens.
+renderer.shadowMap.autoUpdate = false;
+// "Neutral" (Khronos) guarda as cores vivas, ao contrário do ACES que as desbota: dá o ar abonecado.
+renderer.toneMapping = THREE.NeutralToneMapping;
+renderer.toneMappingExposure = 0.92;
 app.appendChild(renderer.domElement);
 
 const cena = new THREE.Scene();
@@ -168,6 +179,7 @@ const confetes = new Confetes(cena);
 const particulas = new Particulas(cena);
 const posfx = new PosFx(renderer, cena, camara);
 posfx.excluirDaOclusao(particulas.grupo, confetes.malha, () => [imVidro]);
+(window as unknown as Record<string, unknown>).__sl = { renderer, cena, posfx, ambiente };
 
 // Chão: lajes de granito no espaço aberto (2 por célula, alinhadas com a grelha); soalho ou parquet nas salas.
 // Uma instância por célula em cada tipo de chão; a célula só aparece no tipo que lhe cabe.
@@ -188,6 +200,8 @@ const PISOS = [
 const CORES_SALA = [0x7dd3fc, 0xf9a8d4, 0x86efac, 0xfde68a, 0xc4b5fd, 0xfdba74, 0x5eead4, 0xfca5a5].map((c) =>
   new THREE.Color(0xffffff).lerp(new THREE.Color(c), 0.16));
 let totalSalas = 0;
+const COR_FORA = new THREE.Color(0x5a5f66); // terreno fora do escritório (ainda não é teu)
+const BRANCO = new THREE.Color(0xffffff);
 
 /** Pinta o chão: cada sala fechada tem o seu chão e o seu tom, o espaço aberto fica em betão. */
 function pintarChao(): void {
@@ -199,7 +213,10 @@ function pintarChao(): void {
     const piso = n < 0 ? 0 : 1 + (n % 2);
     m.makeTranslation(i % LARGURA, 0, Math.floor(i / LARGURA));
     PISOS.forEach((im, k) => im.setMatrixAt(i, k === piso ? m : zero));
-    if (n >= 0) PISOS[piso].setColorAt(i, CORES_SALA[n % CORES_SALA.length]);
+    const fora = !dentroDoEscritorio(s, i % LARGURA, Math.floor(i / LARGURA));
+    if (fora) PISOS[piso].setColorAt(i, COR_FORA);
+    else if (n >= 0) PISOS[piso].setColorAt(i, CORES_SALA[n % CORES_SALA.length]);
+    else PISOS[piso].setColorAt(i, BRANCO);
   });
   for (const im of PISOS) {
     im.instanceMatrix.needsUpdate = true;
@@ -696,7 +713,7 @@ function atualizarCursores(p: THREE.Vector3 | null): void {
   if (!naGrelha) return;
   if (ferramenta === 'secretaria' || ferramenta === 'decoracao') {
     const custo = ferramenta === 'secretaria' ? ECON.custoSecretaria : OBJETOS[objetoEscolhido].custo;
-    const ocupada = !!secretariaEm(s, x, z) || !!objetoEm(s, x, z) || (x === s.entrada.x && z === s.entrada.z);
+    const ocupada = !dentroDoEscritorio(s, x, z) || !!secretariaEm(s, x, z) || !!objetoEm(s, x, z) || (x === s.entrada.x && z === s.entrada.z);
     const valido = !ocupada && s.dinheiro >= custo;
     mostrarModelo(ferramenta === 'secretaria' ? 'secretaria' : objetoEscolhido, x, z, valido);
     matCursor.color.set(valido ? 0x6fd68b : 0xff6b6b);
@@ -927,8 +944,14 @@ function barrasCompetencias(c: Competencias): string {
 }
 
 function classeEstado(f: Funcionario): string {
-  if (['semSecretaria', 'semAcesso', 'preso'].includes(f.estado)) return 'mau';
+  if (deBaixa(s, f) || ['semSecretaria', 'semAcesso', 'preso'].includes(f.estado)) return 'mau';
   return f.estado === 'aTrabalhar' ? 'bom' : '';
+}
+
+/** Nome do estado, com as baixas (que não são um estado de movimento). */
+function nomeEstado(f: Funcionario): string {
+  if (deBaixa(s, f)) return `De baixa · ${Math.ceil((f.baixaAte! - s.minuto) / MIN_POR_DIA)} d`;
+  return NOME_ESTADO[f.estado];
 }
 
 // --- Barra de cima ---------------------------------------------------------
@@ -1010,13 +1033,15 @@ barraObjetos.addEventListener('click', (ev) => {
 
 // --- Painel lateral com separadores ----------------------------------------
 
-type Separador = 'projetos' | 'equipa' | 'contratar' | 'produtos' | 'mercado' | 'numeros';
+type Separador = 'projetos' | 'equipa' | 'contratar' | 'produtos' | 'pesquisa' | 'mercado' | 'empresa' | 'numeros';
 const SEPARADORES: { id: Separador; icone: NomeIcone; nome: string }[] = [
   { id: 'projetos', icone: 'folder-kanban', nome: 'Projetos' },
   { id: 'equipa', icone: 'users', nome: 'Equipa' },
   { id: 'contratar', icone: 'user-plus', nome: 'Contratar' },
   { id: 'produtos', icone: 'package', nome: 'Produtos' },
+  { id: 'pesquisa', icone: 'flask-conical', nome: 'Pesquisa' },
   { id: 'mercado', icone: 'building-2', nome: 'Mercado' },
+  { id: 'empresa', icone: 'landmark', nome: 'Empresa' },
   { id: 'numeros', icone: 'chart-column', nome: 'Números' },
 ];
 let separador: Separador = 'projetos';
@@ -1039,6 +1064,8 @@ const lateral = el(`<div id="lateral" class="ui vidro hud">
     <section data-sec="equipa"><div id="p-equipa"></div></section>
     <section data-sec="contratar"><div id="p-candidatos"></div></section>
     <section data-sec="produtos"><div id="p-produtos"></div></section>
+    <section data-sec="pesquisa"><div id="p-pesquisa"></div></section>
+    <section data-sec="empresa"><div id="p-empresa"></div></section>
     <section data-sec="mercado"><div id="p-mercado"></div></section>
     <section data-sec="numeros">
       <div class="cartao"><h3>${ic('chart-line')} Últimos 24 meses</h3><canvas id="grafico"></canvas>
@@ -1175,18 +1202,30 @@ lateral.addEventListener('click', async (ev) => {
   } else if (a === 'tipo') {
     tipoEscolhido = b.dataset.tipo as TipoSoftware;
     funcEscolhidas = [];
+    escolherSequela(null);
   } else if (a === 'projeto') {
     const input = document.getElementById('nome-projeto') as HTMLInputElement | null;
     const equipa = equipaEscolhida();
     const r = equipa.length === 0
       ? { ok: false, msg: 'Escolhe pelo menos uma pessoa para a equipa.' }
-      : iniciarProjeto(s, input?.value ?? '', tipoEscolhido, funcEscolhidas, equipa.map((f) => f.id));
+      : iniciarProjeto(s, input?.value ?? '', tipoEscolhido, funcEscolhidas, equipa.map((f) => f.id), sequelaEscolhida);
     resultado(r, som.evento);
     if (r.ok) {
       funcEscolhidas = [];
       marcacoes.clear();
       if (input) input.value = '';
+      sequelaEscolhida = null;
+      nomeSugerido = '';
     }
+  } else if (a === 'crunch') {
+    resultado(alternarCrunch(s, Number(b.dataset.id)), som.evento);
+  } else if (a === 'patch') {
+    resultado(iniciarManutencao(s, Number(b.dataset.produto)), som.evento);
+  } else if (a === 'pesquisar') {
+    const id = (b.dataset.tec || null) as IdTecnologia | null;
+    resultado(escolherPesquisa(s, id));
+  } else if (a === 'financiar') {
+    resultado(financiarPesquisa(s), som.dinheiro);
   } else if (a === 'modo') {
     modoNovo = b.dataset.modo === 'contrato' ? 'contrato' : 'produto';
   } else if (a === 'oferta') {
@@ -1208,6 +1247,24 @@ lateral.addEventListener('click', async (ev) => {
     const pct = `${Math.round(d.parte * 100)}%`;
     if (await confirmar(`Vender <b>${pct}</b> da empresa por <b>${euros(valorDaRonda(s, id))}</b>?<br><small>Os investidores passam a ficar com ${pct} do lucro de cada mês (dividendos).</small>`, 'Vender'))
       resultado(levantarRonda(s, id), som.dinheiro);
+  } else if (a === 'escritorio') {
+    const i = Number(b.dataset.i);
+    const e = ESCRITORIOS[i];
+    const renda = rendaDe(s) + e.renda - (ESCRITORIOS[s.escritorio ?? 0]?.renda ?? 0);
+    if (await confirmar(`Mudar para <b>${e.nome}</b> (${e.largura}×${e.altura}) por <b>${euros(e.custo)}</b>?<br><small>A renda passa a ${euros(renda)}/mês. As paredes e a mobília ficam onde estão.</small>`, 'Mudar'))
+      resultado(mudarEscritorio(s, i), som.dinheiro);
+  } else if (a === 'comprar-rival') {
+    const r = s.rivais.find((o) => o.id === Number(b.dataset.id));
+    if (r && await confirmar(`Comprar a <b>${esc(r.nome)}</b> por <b>${euros(precoAquisicao(r))}</b>?<br><small>Sai do ranking e passa a dar-te cerca de ${euros(Math.round(r.valor * AQUISICAO.lucroMensal))} de lucro por mês.</small>`, 'Comprar'))
+      resultado(comprarRival(s, r.id), som.dinheiro);
+  } else if (a === 'bolsa') {
+    const encaixe = Math.round(avaliarEmpresa(s).total * BOLSA.parteVendida * (1 - s.participacao));
+    if (await confirmar(`Entrar em bolsa e vender <b>${Math.round(BOLSA.parteVendida * 100)}%</b> da tua parte por <b>${euros(encaixe)}</b>?<br><small>Os acionistas ficam com essa parte do lucro. Só se faz uma vez.</small>`, 'Entrar em bolsa'))
+      resultado(entrarEmBolsa(s), som.dinheiro);
+  } else if (a === 'feira') {
+    resultado(irAFeira(s, b.dataset.feira!), som.dinheiro);
+  } else if (a === 'formacao') {
+    resultado(iniciarFormacao(s, Number(b.dataset.id), b.dataset.area as Area), som.dinheiro);
   } else if (a === 'cancelar') {
     if (await confirmar('Cancelar o projeto? <b>O trabalho feito perde-se.</b>', 'Cancelar projeto'))
       resultado(cancelarProjeto(s, Number(b.dataset.id)));
@@ -1224,6 +1281,9 @@ lateral.addEventListener('change', (ev) => {
       : semDependentes(tipoEscolhido, funcEscolhidas, id);
   } else if (c.dataset.membro) {
     marcacoes.set(Number(c.dataset.membro), c.checked);
+  } else if (c.hasAttribute('data-sequela')) {
+    const valor = (c as unknown as HTMLSelectElement).value;
+    escolherSequela(valor === '' ? null : Number(valor));
   } else if (c.dataset.equipa) {
     const valor = (c as unknown as HTMLSelectElement).value;
     resultado(definirEquipa(s, Number(c.dataset.equipa), valor === '' ? null : Number(valor)));
@@ -1239,6 +1299,18 @@ let tipoEscolhido: TipoSoftware = 'utilitario';
 let funcEscolhidas: string[] = [];
 /** Escolhas feitas à mão nas caixas da equipa; quem não foi mexido entra se estiver sem projeto. */
 const marcacoes = new Map<number, boolean>();
+/** Produto (índice em s.produtos) de que o próximo projeto é uma nova versão. */
+let sequelaEscolhida: number | null = null;
+/** Último nome sugerido para a sequela (só se troca o nome se o jogador não o tiver mudado). */
+let nomeSugerido = '';
+
+function escolherSequela(indice: number | null): void {
+  sequelaEscolhida = indice;
+  const input = document.getElementById('nome-projeto') as HTMLInputElement | null;
+  const nome = indice === null ? '' : nomeSequela(s, indice);
+  if (input && (input.value === '' || input.value === nomeSugerido)) input.value = nome;
+  nomeSugerido = nome;
+}
 
 function equipaEscolhida(): Funcionario[] {
   return s.funcionarios.filter((f) => marcacoes.get(f.id) ?? f.projetoId === null);
@@ -1268,19 +1340,29 @@ function htmlListaProjetos(): string {
     const pct = Math.min(100, (p.trabalhoFeito / p.trabalhoTotal) * 100);
     const funcs = p.funcionalidades.map((id) => TIPOS[p.tipo].funcionalidades.find((f) => f.id === id)!.nome);
     const membros = membrosDe(s, p.id);
-    const prev = mesesRestantes(p, membros, coordenacaoDe(s));
+    const prev = mesesRestantes(p, membros, coordenacaoDe(s), velocidadeDe(s));
+    const alvo = p.manutencao !== undefined ? s.produtos[p.manutencao] : undefined;
     const q = Math.min(1, qualidadeDoProjeto(p) + bonusQualidade(s));
     const c = p.contrato;
     const dias = c ? Math.ceil((c.prazo - s.minuto) / MIN_POR_DIA) : 0;
-    const sub = c ? `Contrato · ${esc(c.cliente)}` : `${TIPOS[p.tipo].nome}${funcs.length ? ` · ${funcs.join(', ')}` : ''}`;
-    const stats = c
+    const sub = c ? `Contrato · ${esc(c.cliente)}`
+      : alvo ? `Patch · ${Math.round(alvo.bugs ?? 0)} bugs por corrigir`
+      : `${TIPOS[p.tipo].nome}${p.sequela ? ` · versão ${p.sequela.versao}` : ''}${funcs.length ? ` · ${funcs.join(', ')}` : ''}`;
+    const stats = alvo
+      ? `<div><b>${Math.round(alvo.bugs ?? 0)}</b><small>bugs</small></div>
+        <div><b>${Number.isFinite(prev) ? mesesTexto(prev) : '—'}</b><small>${Number.isFinite(prev) ? 'meses' : 'parado'}</small></div>
+        <div><b>${Math.round(fatorBugs(alvo.bugs ?? 0) * 100)}%</b><small>vendas</small></div>`
+      : c
       ? `<div><b>${Math.round(q * 100)}%</b><small>qualidade</small></div>
         <div><b class="${c.atrasado ? 'mau' : dias <= 5 ? 'aviso' : ''}">${c.atrasado ? 'atrasado' : dias <= 0 ? 'hoje' : `${dias} d`}</b><small>prazo</small></div>
         <div><b>${compacto(pagamentoDoContrato(c, q))}</b><small>pagamento</small></div>`
       : `<div><b>${Math.round(q * 100)}%</b><small>qualidade</small></div>
         <div><b>${Number.isFinite(prev) ? mesesTexto(prev) : '—'}</b><small>${Number.isFinite(prev) ? 'meses' : 'parado'}</small></div>
         <div><b>${p.hype ? `+${Math.round(p.hype * 100)}%` : '—'}</b><small>expectativa</small></div>`;
-    const marketing = c ? '' : `<div class="marketing"><div class="rotulo">${ic('megaphone')} Marketing</div><div class="campanhas">${LISTA_CAMPANHAS.map((id) => {
+    const crunch = `<button class="mini largo crunch ${p.crunch ? 'ligado' : ''}" data-acao="crunch" data-id="${p.id}"
+      title="Horas extra: +${Math.round((CRUNCH.velocidade - 1) * 100)}% de ritmo, mas a equipa cansa-se, há mais baixas e mais bugs.">
+      ${ic('flame')} ${p.crunch ? 'Horas extra ligadas — desligar' : 'Fazer horas extra'}</button>`;
+    const marketing = c || alvo ? '' : `<div class="marketing"><div class="rotulo">${ic('megaphone')} Marketing</div><div class="campanhas">${LISTA_CAMPANHAS.map((id) => {
       const d = CAMPANHAS[id];
       const feita = p.campanhas?.includes(id) ?? false;
       const bloq = nivel < d.nivel;
@@ -1288,8 +1370,8 @@ function htmlListaProjetos(): string {
         title="${d.descricao} Expectativa +${Math.round(d.hype * 100)}% (menos se já houver muita).">${ic(feita ? 'check' : bloq ? 'lock' : ICONE_CAMPANHA[id])}
         <span>${d.nome}</span><small>${feita ? 'feita' : bloq ? `nível ${d.nivel}` : euros(d.custo)}</small></button>`;
     }).join('')}</div></div>`;
-    return `<div class="cartao projeto ${c ? 'contrato' : ''}">
-      <div class="cab"><span class="ic-tipo">${c ? ic('briefcase') : ICONE_TIPO[p.tipo]}</span>
+    return `<div class="cartao projeto ${c ? 'contrato' : ''} ${p.crunch ? 'em-crunch' : ''}">
+      <div class="cab"><span class="ic-tipo">${c ? ic('briefcase') : alvo ? ic('bug') : ICONE_TIPO[p.tipo]}</span>
         <div class="cresce"><b>${esc(p.nome)}</b><small>${sub}</small></div>
         <button class="mini perigo icone-mini" data-acao="cancelar" data-id="${p.id}" title="Cancelar (o trabalho perde-se)">${ic('x')}</button></div>
       <div class="progresso"><div style="width:${pct.toFixed(1)}%"></div><span>${pct.toFixed(0)}%</span></div>
@@ -1302,6 +1384,7 @@ function htmlListaProjetos(): string {
         ? membros.map((f) => avatar(f.nome, especialidade(f))).join('')
           + (membros.length > 1 ? `<small>rendimento ${Math.round(eficienciaEquipa(membros.length, coordenacaoDe(s)) * 100)}% por pessoa</small>` : '')
         : `<span class="aviso">${ic('triangle-alert')} Sem equipa: o projeto está parado.</span>`}</div>
+      ${crunch}
       ${marketing}
     </div>`;
   }).join('');
@@ -1338,10 +1421,16 @@ function htmlConfigProduto(): string {
   if (!tipoDisponivel(s, tipoEscolhido)) tipoEscolhido = 'utilitario';
   const d = TIPOS[tipoEscolhido];
   const equipa = equipaEscolhida();
-  const previsao = estimarProjeto(equipa, tipoEscolhido, funcEscolhidas, coordenacaoDe(s));
+  funcEscolhidas = funcEscolhidas.filter((id) => funcionalidadeDisponivel(s, tipoEscolhido, id));
+  const previsao = estimarProjeto(equipa, tipoEscolhido, funcEscolhidas, coordenacaoDe(s), velocidadeDe(s));
   previsao.qualidade = Math.min(1, previsao.qualidade + bonusQualidade(s));
   const mercado = fatorMercado(s, tipoEscolhido);
+  const era = eraAtual(s);
+  const sequelas = candidatosSequela(s, tipoEscolhido);
+  if (sequelaEscolhida !== null && !sequelas.includes(sequelaEscolhida)) sequelaEscolhida = null;
+  const hypeSequela = sequelaEscolhida === null ? 0 : bonusSequela(s, sequelaEscolhida);
   const vendas = vendasIniciais(tipoEscolhido, funcEscolhidas, previsao.qualidade, mercado)
+    * fatorEra(s, tipoEscolhido, funcEscolhidas) * (1 + hypeSequela)
     * (temMelhoria(s, 'marketing') ? 1.15 : 1);
   const tipos = LISTA_TIPOS.map((t) => {
     const livre = tipoDisponivel(s, t);
@@ -1354,14 +1443,28 @@ function htmlConfigProduto(): string {
   const funcs = d.funcionalidades.map((f) => {
     const req = f.requer.map((r) => d.funcionalidades.find((o) => o.id === r)!.nome);
     const on = funcEscolhidas.includes(f.id);
+    const procura = procuraFuncionalidade(era, tipoEscolhido, f.id);
+    const tag = procura > 1.05 ? ` <span class="tag-era sobe" title="Muito procurada na ${era.nome}">${ic('trending-up')}</span>`
+      : procura < 0.95 ? ` <span class="tag-era desce" title="Já pouco procurada na ${era.nome}">${ic('trending-down')}</span>` : '';
+    if (!funcionalidadeDisponivel(s, tipoEscolhido, f.id)) {
+      const tec = TECNOLOGIAS[f.tecnologia!];
+      return `<label class="opcao-check bloqueada" title="Investiga primeiro ${tec.nome} (separador Pesquisa)"><input type="checkbox" disabled><span class="caixa">${ic('lock')}</span>
+      <span class="cresce"><b>${f.nome}${tag}</b><small>precisa da tecnologia ${tec.nome}</small></span></label>`;
+    }
     return `<label class="opcao-check ${on ? 'on' : ''}"><input type="checkbox" data-func="${f.id}" ${on ? 'checked' : ''}><span class="caixa">${ic('check')}</span>
-      <span class="cresce"><b>${f.nome}</b><small>+${(f.trabalho / 1000).toFixed(0)}k pontos · +${Math.round(f.valor * 100)}% vendas${req.length ? ` · precisa de ${req.join(', ')}` : ''}</small></span></label>`;
+      <span class="cresce"><b>${f.nome}${tag}</b><small>+${(f.trabalho / 1000).toFixed(0)}k pontos · +${Math.round(f.valor * procura * 100)}% vendas${req.length ? ` · precisa de ${req.join(', ')}` : ''}</small></span></label>`;
   }).join('');
   const meses = previsao.meses;
   const m = Math.round(mercado * 100);
   return `
     <div class="tipos">${tipos}</div>
     <p class="descricao">${d.descricao}</p>
+    ${sequelas.length ? `<div class="rotulo">${ic('star')} Nova versão de</div>
+    <select data-sequela class="sequela">
+      <option value="" ${sequelaEscolhida === null ? 'selected' : ''}>Produto novo</option>
+      ${sequelas.map((i) => `<option value="${i}" ${sequelaEscolhida === i ? 'selected' : ''}>${esc(s.produtos[i].nome)} (${Math.round(s.produtos[i].qualidade * 100)}%) → ${esc(nomeSequela(s, i))}</option>`).join('')}
+    </select>
+    ${sequelaEscolhida !== null ? `<div class="nota">Os fãs do original dão <b>+${Math.round(hypeSequela * 100)}%</b> de expectativa, mas os críticos vão comparar com os ${Math.round(s.produtos[sequelaEscolhida].qualidade * 100)}% do original: se sair pior, vende menos.</div>` : ''}` : ''}
     <div class="rotulo">Trabalho por área</div>
     ${htmlDivisao(tipoEscolhido)}
     ${funcs ? `<div class="rotulo">Funcionalidades</div><div class="lista-checks">${funcs}</div>` : ''}
@@ -1371,6 +1474,7 @@ function htmlConfigProduto(): string {
       <div><small>Qualidade</small><b>${equipa.length ? `${Math.round(previsao.qualidade * 100)}%` : '—'}</b></div>
       <div><small>Vendas 1.º mês</small><b>${equipa.length ? euros(vendas) : '—'}</b></div>
     </div>
+    <div class="nota">${era.icone} ${era.nome}: procura de ${d.plural.toLowerCase()} a ${Math.round((era.tipos[tipoEscolhido] ?? 1) * 100)}%.</div>
     <div class="mercado ${m < 70 ? 'aviso' : ''}" title="Os produtos do mesmo tipo ainda à venda ocupam o mercado."><span>Mercado livre</span>
       <div class="barra"><div style="width:${m}%"></div></div><b>${m}%</b></div>
     <div class="nota">Durante o desenvolvimento podes fazer campanhas de marketing para vender mais no lançamento.</div>
@@ -1456,10 +1560,67 @@ function htmlMercado(): string {
       ${rondas}</div>`;
 }
 
+const MESES_NOME = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+
+function htmlEmpresa(): string {
+  const atual = s.escritorio;
+  const escritorios = atual === undefined ? '<div class="nota">Já tens o terreno todo.</div>' : ESCRITORIOS.map((e, i) => {
+    const pode = i > atual && s.dinheiro >= e.custo;
+    const renda = e.renda > 0 ? `+${euros(e.renda)} de renda por mês` : e.renda < 0 ? `${euros(-e.renda)} a menos de renda por mês` : 'Renda normal';
+    return `<div class="ronda ${i === atual ? 'feita' : pode ? 'pode' : ''}">
+      <span class="cresce"><b>${e.nome} · ${e.largura}×${e.altura}</b><small>${renda}${e.custo ? ` · mudança ${euros(e.custo)}` : ''}</small></span>
+      ${i === atual ? `<span class="estado bom">${ic('house')} Atual</span>` : i < atual ? '' : `<button class="mini ${pode ? 'primario' : ''}" data-acao="escritorio" data-i="${i}" ${pode ? '' : 'disabled'}>Mudar</button>`}
+    </div>`;
+  }).join('');
+  const nivel = nivelDaEmpresa(s);
+  const subs = (s.subsidiarias ?? []).map((d) => `<div class="lugar"><span class="pos">${ic('briefcase')}</span>
+      <span class="cresce"><b>${esc(d.nome)}</b><small>${TIPOS[d.tipo].plural}</small></span>
+      <span class="valor"><b>${compacto(d.valor)}</b><small class="sobe">+${compacto(d.valor * AQUISICAO.lucroMensal)}/mês</small></span></div>`).join('');
+  const rivais = nivel < AQUISICAO.nivelMinimo
+    ? `<div class="nota">${ic('lock')} Precisas do nível ${AQUISICAO.nivelMinimo} para comprar concorrentes (estás no ${nivel}).</div>`
+    : [...s.rivais].sort((a, b) => precoAquisicao(a) - precoAquisicao(b)).map((r) => {
+      const preco = precoAquisicao(r);
+      const pode = s.dinheiro >= preco;
+      return `<div class="lugar"><span class="cresce"><b>${esc(r.nome)}</b><small>${TIPOS[r.tipo].plural} · lucro ${compacto(r.valor * AQUISICAO.lucroMensal)}/mês</small></span>
+        <button class="mini ${pode ? 'primario' : ''}" data-acao="comprar-rival" data-id="${r.id}" ${pode ? '' : 'disabled'}>Comprar ${compacto(preco)}</button></div>`;
+    }).join('');
+  let bolsa: string;
+  if (s.bolsa) {
+    const h = s.bolsa.historico;
+    const p = precoAcao(s);
+    const ant = h[h.length - 2] ?? p;
+    bolsa = `<div class="valor-grande">${p.toFixed(2).replace('.', ',')} €<span class="var ${p >= ant ? 'sobe' : 'desce'}">${ic(p >= ant ? 'arrow-up-right' : 'arrow-down-right')}${percentagem(ant ? p / ant - 1 : 0)}</span></div>
+      ${sparkline(h, 320, 46)}
+      <div class="nota">Preço de cada uma das ${BOLSA.acoes.toLocaleString('pt-PT')} ações, atualizado no fecho do mês. Acionistas e investidores têm ${Math.round(s.participacao * 100)}% da empresa.</div>`;
+  } else {
+    const r = podeEntrarEmBolsa(s);
+    bolsa = `<div class="nota">Vende ${Math.round(BOLSA.parteVendida * 100)}% da tua parte ao público. É preciso o nível ${BOLSA.nivelMinimo} e uma avaliação de ${compacto(BOLSA.valorMinimo)}.</div>
+      ${r.ok ? `<button class="primario largo" data-acao="bolsa">${ic('chart-line')} Entrar em bolsa (${compacto(avaliarEmpresa(s).total * BOLSA.parteVendida * (1 - s.participacao))})</button>`
+        : `<span class="estado">${ic('lock')} ${esc(r.msg ?? '')}</span>`}`;
+  }
+  const agora = feirasDisponiveis(s);
+  const feiras = FEIRAS.map((f) => {
+    const pode = agora.includes(f);
+    return `<div class="ronda ${pode ? 'pode' : ''}">
+      <span class="cresce"><b>${f.icone} ${esc(f.nome)}</b><small>${esc(f.descricao)} Em ${MESES_NOME[f.mes]} · ${euros(f.custo)}</small></span>
+      ${pode ? `<button class="mini primario" data-acao="feira" data-feira="${f.id}" ${s.dinheiro >= f.custo ? '' : 'disabled'}>Ir</button>` : ''}
+    </div>`;
+  }).join('');
+  return `<div class="cartao"><h3>${ic('building-2')} Escritório <small>${atual === undefined ? 'terreno todo' : ESCRITORIOS[atual].nome}</small></h3>
+      <div class="nota">Só podes construir dentro do escritório (o chão escuro ainda não é teu). Muda-te para um maior quando a equipa crescer.</div>
+      ${escritorios}</div>
+    <div class="cartao"><h3>${ic('presentation')} Feiras e eventos <small>uma vez por ano</small></h3>
+      <div class="nota">Mostrar o trabalho numa feira dá expectativa aos projetos em curso e vendas aos produtos.</div>${feiras}</div>
+    <div class="cartao"><h3>${ic('briefcase')} Aquisições <small>${subs ? `${s.subsidiarias!.length} subsidiária(s)` : 'nenhuma'}</small></h3>
+      ${subs ? `<div class="ranking">${subs}</div>` : ''}
+      <div class="ranking">${rivais}</div></div>
+    <div class="cartao"><h3>${ic('chart-line')} Bolsa <small>${s.bolsa ? 'cotada' : 'ainda não'}</small></h3>${bolsa}</div>`;
+}
+
 function htmlEquipa(): string {
   const salarios = s.funcionarios.reduce((t, f) => t + f.salario, 0);
   const media = s.funcionarios.length ? s.funcionarios.reduce((t, f) => t + f.felicidade, 0) / s.funcionarios.length : 0;
-  const opcoes = (f: Funcionario) => [`<option value="" ${f.projetoId === null ? 'selected' : ''}>Sem projeto</option>`,
+  const opcoes = (f: Funcionario) => [`<option value="" ${f.projetoId === null ? 'selected' : ''}>Sem projeto (investiga)</option>`,
     ...s.projetos.map((p) => `<option value="${p.id}" ${f.projetoId === p.id ? 'selected' : ''}>${esc(p.nome)}</option>`)].join('');
   return `<div class="resumo">
       <div><small>Pessoas</small><b>${s.funcionarios.length}</b></div>
@@ -1470,7 +1631,7 @@ function htmlEquipa(): string {
     ${s.funcionarios.map((f) => `<div class="cartao pessoa ${f.id === selecionado ? 'selecionado' : ''}" data-pessoa="${f.id}" title="Clica para ver no escritório">
       ${avatar(f.nome, especialidade(f))}
       <div class="cresce">
-        <div class="linha"><b>${esc(f.nome)}</b><span class="estado ${classeEstado(f)}">${NOME_ESTADO[f.estado]}</span></div>
+        <div class="linha"><b>${esc(f.nome)}</b><span class="estado ${classeEstado(f)}">${nomeEstado(f)}</span></div>
         ${barrasCompetencias(f.competencias)}
         <div class="linha sub"><span style="color:${COR_FEL(f.felicidade)}">${CARA_FEL(f.felicidade)} ${Math.round(f.felicidade)}</span><span>${euros(f.salario)}/mês</span></div>
         <div class="linha"><select data-equipa="${f.id}" class="${f.projetoId === null ? 'aviso' : ''}">${opcoes(f)}</select>
@@ -1494,8 +1655,74 @@ function htmlCandidatos(): string {
     }).join('')}`;
 }
 
+/** Linha de bugs de um produto: contagem, efeito nas vendas e botão de patch. */
+function htmlBugs(i: number): string {
+  const p = s.produtos[i];
+  const bugs = Math.round(p.bugs ?? 0);
+  const patch = manutencaoDe(s, i);
+  const classe = bugs >= BUGS.alto ? 'mau' : bugs > 0 ? 'aviso' : 'bom';
+  const perda = Math.round((1 - fatorBugs(p.bugs ?? 0)) * 100);
+  const novos = Math.round(p.ritmoBugs ?? 0);
+  const acao = patch
+    ? `<small class="em-patch">${ic('hammer')} patch ${Math.round((patch.trabalhoFeito / patch.trabalhoTotal) * 100)}%</small>`
+    : bugs > 0 && p.vendasMes > 0
+      ? `<button class="mini" data-acao="patch" data-produto="${i}" title="Põe quem está sem projeto a corrigir os bugs (programação e testes)">${ic('hammer')} Patch</button>`
+      : '';
+  return `<div class="linha-bugs ${classe}" title="Nota dos utilizadores ${notaUtilizadores(p).toLocaleString('pt-PT')}/10${novos ? ` · ~${novos} bugs novos por aparecer no próximo mês` : ''}">
+    <span>${ic('bug')} ${bugs ? `${bugs} bug${bugs === 1 ? '' : 's'}${perda ? ` · −${perda}% vendas` : ''}` : 'Sem bugs conhecidos'}</span>${acao}</div>`;
+}
+
+/** Cartão da era tecnológica: atual, o que está na moda e a próxima. */
+function htmlEra(): string {
+  const era: DefEra = eraAtual(s);
+  const prox = proximaEra(s);
+  const t = tendenciasEra(era);
+  const mes = Math.floor(s.minuto / MIN_POR_MES);
+  return `<div class="cartao era"><h3>${era.icone} ${era.nome}</h3>
+    <div class="nota">${era.descricao}</div>
+    ${t.sobe.length ? `<div class="tendencia sobe">${ic('trending-up')} Em alta: ${t.sobe.join(', ')}</div>` : ''}
+    ${t.desce.length ? `<div class="tendencia desce">${ic('trending-down')} Em baixa: ${t.desce.join(', ')}</div>` : ''}
+    ${prox ? `<small class="sub">Próxima: ${prox.icone} ${prox.nome} daqui a ${mesesTexto(prox.inicioMes - mes)} m</small>` : ''}</div>`;
+}
+
+function htmlPesquisa(): string {
+  const porMes = pesquisaPorMes(s);
+  const atual = s.pesquisaAtual ? TECNOLOGIAS[s.pesquisaAtual] : null;
+  const pct = atual ? Math.min(100, (s.pesquisaProgresso / atual.custo) * 100) : 0;
+  const falta = atual ? Math.max(0, atual.custo - s.pesquisaProgresso - s.pesquisaReserva) : 0;
+  const niveis = [...new Set(LISTA_TECNOLOGIAS.map((id) => TECNOLOGIAS[id].nivel))].sort((a, b) => a - b);
+  const cartao = (id: IdTecnologia) => {
+    const d = TECNOLOGIAS[id];
+    const feita = temTecnologia(s, id);
+    const pode = podeInvestigar(s, id);
+    const aInvestigar = s.pesquisaAtual === id;
+    const funcs = funcionalidadesDaTecnologia(id).map((x) => `${x.funcionalidade.nome} (${TIPOS[x.tipo].nome.toLowerCase()})`);
+    const efeitos = [...funcs, ...(d.bonus ? [d.bonus] : [])].join(' · ');
+    const requer = d.requer.length ? `Requer ${d.requer.map((r) => TECNOLOGIAS[r].nome).join(' e ')}` : '';
+    const estado = feita ? 'feita' : aInvestigar ? 'atual' : pode.ok ? 'livre' : 'bloq';
+    return `<button class="tecnologia ${estado}" data-acao="pesquisar" data-tec="${aInvestigar ? '' : id}" ${feita || (!pode.ok && !aInvestigar) ? 'disabled' : ''}
+      title="${esc(d.descricao)}${requer ? ` ${requer}.` : ''}${aInvestigar ? ' (clica para parar)' : ''}">
+      <span class="ic">${feita ? ic('check') : estado === 'bloq' ? ic('lock') : d.icone}</span>
+      <span class="cresce"><b>${d.nome}</b><small>${efeitos}</small>${!feita && requer && estado === 'bloq' ? `<small class="req">${requer}</small>` : ''}</span>
+      <small class="custo">${feita ? 'feita' : aInvestigar ? `${Math.round(pct)}%` : `${d.custo.toLocaleString('pt-PT')} pts`}</small></button>`;
+  };
+  return `<div class="resumo">
+      <div><small>Por mês</small><b class="bom">${Math.round(porMes).toLocaleString('pt-PT')} pts</b></div>
+      <div><small>Em reserva</small><b>${Math.round(s.pesquisaReserva).toLocaleString('pt-PT')} pts</b></div>
+      <div><small>Tecnologias</small><b>${s.tecnologias.length}/${LISTA_TECNOLOGIAS.length}</b></div>
+    </div>
+    ${htmlEra()}
+    <div class="cartao"><h3>${ic('flask-conical')} ${atual ? `A investigar: ${atual.nome}` : 'Nada em investigação'}</h3>
+      ${atual ? `<div class="progresso"><div style="width:${pct.toFixed(1)}%"></div><span>${pct.toFixed(0)}%</span></div>
+      <div class="nota">${falta > 0 ? porMes > 0 ? `Faltam ${Math.round(falta).toLocaleString('pt-PT')} pontos, ~${mesesTexto(falta / porMes)} m a este ritmo.` : 'Ninguém está a investigar: tira alguém de um projeto.' : 'Quase concluída.'}</div>`
+        : '<div class="nota">Escolhe uma tecnologia em baixo. Quem está sem projeto investiga; os pontos sem destino ficam em reserva.</div>'}
+      <button class="largo" data-acao="financiar" ${s.dinheiro < PESQUISA.custoPacote ? 'disabled' : ''}>${ic('banknote')} Contratar consultores · +${PESQUISA.pontosPacote.toLocaleString('pt-PT')} pts por ${euros(PESQUISA.custoPacote)}</button>
+    </div>
+    ${niveis.map((n) => `<div class="rotulo">Nível ${n}</div><div class="arvore">${LISTA_TECNOLOGIAS.filter((id) => TECNOLOGIAS[id].nivel === n).map(cartao).join('')}</div>`).join('')}`;
+}
+
 function htmlProdutos(): string {
-  const vendas = s.produtos.reduce((t, p) => t + p.vendasMes, 0);
+  const vendas = s.produtos.reduce((t, p) => t + vendasComBugs(p), 0);
   const total = s.produtos.reduce((t, p) => t + p.receitaTotal, 0);
   const mercados = LISTA_TIPOS.filter((t) => tipoDisponivel(s, t)).map((t) => {
     const m = Math.round(fatorMercado(s, t) * 100);
@@ -1512,10 +1739,11 @@ function htmlProdutos(): string {
     </div>
     <div class="cartao"><h3>${ic('chart-column')} Mercado livre</h3><div class="nota">Quanto venderia um produto novo de cada tipo.</div>${mercados}</div>
     ${s.produtos.length === 0 ? '<div class="vazio">Nenhum produto lançado ainda.</div>' : ''}
-    ${s.produtos.slice(-15).reverse().map((p) => `<div class="cartao produto">
+    ${s.produtos.map((p, i) => ({ p, i })).slice(-15).reverse().map(({ p, i }) => `<div class="cartao produto">
       <span class="ic-tipo">${ICONE_TIPO[p.tipo]}</span>
       <div class="cresce"><b>${esc(p.nome)}</b><small>${TIPOS[p.tipo].nome} · total ${euros(p.receitaTotal)}</small>${estrelas(p.qualidade)}</div>
-      <div class="vendas"><b>${euros(p.vendasMes)}</b><small>por mês</small></div></div>`).join('')}`;
+      <div class="vendas"><b>${euros(vendasComBugs(p))}</b><small>por mês</small></div>
+      ${htmlBugs(i)}</div>`).join('')}`;
 }
 
 function htmlNumeros(): string {
@@ -1544,14 +1772,32 @@ function htmlFicha(f: Funcionario): string {
   return `<div class="cab">${avatar(f.nome, area, true)}
       <div class="cresce"><b>${esc(f.nome)}</b><small>Especialista em ${NOME_AREA[area].toLowerCase()} · ${euros(f.salario)}/mês</small></div>
       <button class="mini icone-mini" data-fechar title="Fechar (Esc)">${ic('x')}</button></div>
-    <div class="linha"><span class="estado ${classeEstado(f)}">${NOME_ESTADO[f.estado]}</span>
-      <span>${proj ? `${ic('folder-open')} ${esc(proj.nome)}` : '<span class="aviso">Sem projeto</span>'}</span></div>
+    <div class="linha"><span class="estado ${classeEstado(f)}">${nomeEstado(f)}</span>
+      <span>${proj ? `${ic(proj.crunch ? 'flame' : 'folder-open')} ${esc(proj.nome)}` : s.pesquisaAtual ? `${ic('flask-conical')} A investigar` : '<span class="aviso">Sem projeto</span>'}</span></div>
     <div class="felicidade">
       <div class="linha"><span>${CARA_FEL(f.felicidade)} Felicidade</span><b style="color:${COR_FEL(f.felicidade)}">${Math.round(f.felicidade)}</b></div>
       <div class="barra"><div style="width:${Math.round(f.felicidade)}%;background:${COR_FEL(f.felicidade)}"></div></div>
       <small>Tende para ${Math.round(alvo)}${nota} · ritmo de trabalho ${ritmo}%</small>
     </div>
-    ${barrasCompetencias(f.competencias)}`;
+    ${barrasCompetencias(f.competencias)}
+    ${htmlPessoal(f)}`;
+}
+
+/** Personalidade, amigos e conflitos, e a formação. */
+function htmlPessoal(f: Funcionario): string {
+  const tracos = (f.tracos ?? []).map((t) => `<span class="chip-tipo" title="${esc(TRACOS[t].descricao)}">${TRACOS[t].icone} ${TRACOS[t].nome}</span>`).join(' ');
+  const rel = relacoesDe(s, f.id);
+  const relacoes = [
+    rel.amigos.length ? `🤝 Amigo de ${rel.amigos.map(esc).join(', ')}` : '',
+    rel.conflitos.length ? `💢 Em conflito com ${rel.conflitos.map(esc).join(', ')}` : '',
+  ].filter(Boolean).join('<br>');
+  const formacao = f.formacao
+    ? `<div class="nota">${ic('medal')} Em formação de ${NOME_AREA[f.formacao.area].toLowerCase()}.</div>`
+    : `<div class="linha formacao"><small>${ic('medal')} Formação · ${FORMACAO.dias} dias · ${euros(FORMACAO.custo)}</small>
+        ${AREAS.map((a) => `<button class="mini" data-acao="formacao" data-id="${f.id}" data-area="${a}" ${f.competencias[a] >= 1 || ausente(s, f) || s.dinheiro < FORMACAO.custo ? 'disabled' : ''}>${NOME_AREA[a]}</button>`).join('')}</div>`;
+  return `${tracos ? `<div class="linha tracos">${tracos}</div>` : ''}
+    ${relacoes ? `<div class="nota">${relacoes}</div>` : ''}
+    ${formacao}`;
 }
 
 function htmlFalencia(): string {
@@ -1740,7 +1986,7 @@ function atualizarUI(): void {
   painelMissoes.atualizar(s, !montra);
   if (montra) return;
   texto('.empresa', s.nome);
-  const vendas = s.produtos.reduce((t, p) => t + p.vendasMes, 0);
+  const vendas = s.produtos.reduce((t, p) => t + vendasComBugs(p), 0);
   const salarios = s.funcionarios.reduce((t, f) => t + f.salario, 0);
   const saldo = vendas - salarios - rendaDe(s);
   texto('.saldo .valor', `${saldo >= 0 ? '+' : ''}${euros(saldo)}/mês`);
@@ -1776,7 +2022,9 @@ function atualizarUI(): void {
     projetos: s.projetos.length ? String(s.projetos.length) : '',
     equipa: problemas ? String(problemas) : '',
     contratar: s.candidatos.length ? String(s.candidatos.length) : '',
-    produtos: '',
+    produtos: String(s.produtos.filter((p) => (p.bugs ?? 0) >= BUGS.alto && p.vendasMes > 0 && !manutencaoDe(s, s.produtos.indexOf(p))).length || ''),
+    empresa: feirasDisponiveis(s).length ? '!' : '',
+    pesquisa: s.pesquisaAtual ? '' : LISTA_TECNOLOGIAS.some((id) => podeInvestigar(s, id).ok) ? '!' : '',
     mercado: String(LISTA_RONDAS.filter((id) => podeLevantar(s, id).ok).length || ''),
     numeros: '',
   };
@@ -1784,7 +2032,7 @@ function atualizarUI(): void {
     const i = b.querySelector('.badge') as HTMLElement;
     const v = badges[b.dataset.sep as Separador];
     if (i.textContent !== v) i.textContent = v;
-    i.classList.toggle('alerta', b.dataset.sep === 'equipa' && problemas > 0);
+    i.classList.toggle('alerta', (b.dataset.sep === 'equipa' && problemas > 0) || (b.dataset.sep === 'produtos' && v !== ''));
   });
   if (painelAberto) {
     if (separador === 'projetos') {
@@ -1794,6 +2042,8 @@ function atualizarUI(): void {
     } else if (separador === 'equipa') definir(document.getElementById('p-equipa')!, htmlEquipa());
     else if (separador === 'contratar') definir(document.getElementById('p-candidatos')!, htmlCandidatos());
     else if (separador === 'produtos') definir(document.getElementById('p-produtos')!, htmlProdutos());
+    else if (separador === 'pesquisa') definir(document.getElementById('p-pesquisa')!, htmlPesquisa());
+    else if (separador === 'empresa') definir(document.getElementById('p-empresa')!, htmlEmpresa());
     else if (separador === 'mercado') definir(document.getElementById('p-mercado')!, htmlMercado());
     else {
       definir(document.getElementById('p-numeros')!, htmlNumeros());
@@ -1834,6 +2084,23 @@ function aplicarDefinicoes(): void {
   configurarSom(def.sons, def.volume);
   posfx.definir(def.qualidade === 'alta' ? 'completo' : def.qualidade === 'media' ? 'acabamento' : 'nenhum');
   posfx.redimensionar(innerWidth, innerHeight, pixelRatio(def.qualidade));
+  contadorFps.style.display = def.mostrarFps ? 'block' : 'none';
+}
+
+/** Contador de FPS (canto inferior direito), atualizado duas vezes por segundo. */
+const contadorFps = document.createElement('div');
+contadorFps.style.cssText =
+  'position:fixed;right:10px;bottom:8px;z-index:50;pointer-events:none;font:600 12px/1 system-ui,sans-serif;' +
+  'color:#d9f99d;background:rgba(15,23,42,.6);padding:5px 8px;border-radius:6px;display:none';
+document.body.appendChild(contadorFps);
+let quadrosFps = 0;
+let inicioFps = performance.now();
+function contarFps(agora: number): void {
+  quadrosFps++;
+  if (agora - inicioFps < 500) return;
+  contadorFps.textContent = `${Math.round((quadrosFps * 1000) / (agora - inicioFps))} FPS`;
+  quadrosFps = 0;
+  inicioFps = agora;
 }
 
 /** Troca o jogo em curso; a cena e as escolhas da interface voltam a ser construídas a partir dele. */
@@ -1921,7 +2188,7 @@ const menus = new Menus({
   },
   continuar: carregar,
   fundar: (opcoes) => {
-    comecarJogo(novoJogo(Date.now() & 0xffff, LARGURA, ALTURA, { ...opcoes, missoes: true }));
+    comecarJogo(novoJogo(Date.now() & 0xffff, LARGURA, ALTURA, { ...opcoes, missoes: true, escritorio: 0 }));
     // Passa a ser o jogo mais recente: ao recarregar a página continua este, não o antigo.
     escreverLugar(LUGAR_AUTO, s);
     avisoFlutuante(`Bem-vindo à <b>${esc(s.nome)}</b>! Segue as missões à esquerda: começa por colocar secretárias (tecla 4) e contratar no separador Contratar.`, 'info', ic('sparkles'));
@@ -1965,7 +2232,18 @@ addEventListener('resize', () => {
 let ultimo = performance.now();
 let acumulado = 0;
 let ultimaUI = 0;
+let proximoQuadro = 0;
+let ultimaSombra = 0;
 function ciclo(agora: number): void {
+  requestAnimationFrame(ciclo);
+  // Limite de FPS. Na app o vsync está desligado (electron/main.cjs), por isso sem limite o
+  // browser chama isto tão depressa quanto a placa gráfica aguenta.
+  if (def.fpsMax > 0) {
+    const intervalo = 1000 / def.fpsMax;
+    if (agora + 0.4 < proximoQuadro) return;
+    proximoQuadro = agora - proximoQuadro > intervalo ? agora + intervalo : proximoQuadro + intervalo;
+  }
+  contarFps(agora);
   const dt = Math.min(0.1, (agora - ultimo) / 1000);
   ultimo = agora;
   // A montra corre sempre; o jogo a sério para enquanto há um menu aberto.
@@ -1999,8 +2277,13 @@ function ciclo(agora: number): void {
   controlos.update(dt);
   posfx.intensidade(def.cicloDia ? ambiente.noite : 0);
   matVidro.emissiveIntensity = (def.cicloDia ? ambiente.noite : 0) * 0.35;
+  // Sombras a 60 Hz na qualidade alta e a 30 nas outras, seja qual for o FPS: só as pessoas e os
+  // carros mexem, e devagar.
+  if (agora - ultimaSombra >= (def.qualidade === 'alta' ? 16 : 32)) {
+    renderer.shadowMap.needsUpdate = true;
+    ultimaSombra = agora;
+  }
   posfx.render();
-  requestAnimationFrame(ciclo);
 }
 
 aplicarDefinicoes();

@@ -13,6 +13,7 @@ const ICONES = [
   'arrow-up-right', 'arrow-down-right', 'party-popper', 'calendar', 'timer', 'gem', 'zap', 'badge-percent',
   'chart-line', 'circle-check', 'circle-x', 'unlock', 'trash-2', 'eye', 'settings', 'house', 'folder-open',
   'trophy', 'medal', 'banknote', 'piggy-bank', 'hourglass', 'mic', 'smartphone', 'tent', 'presentation',
+  'bug', 'flask-conical', 'globe',
 ];
 
 const LICENCA = `ISC License

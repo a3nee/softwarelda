@@ -14,6 +14,10 @@ const CAPTURA = process.env.SL_CAPTURA;
 // Placa gráfica dedicada em portáteis/PCs com duas (a integrada é muito mais lenta).
 app.commandLine.appendSwitch('force_high_performance_gpu');
 app.commandLine.appendSwitch('ignore-gpu-blocklist');
+// Sem vsync, para o jogo poder passar dos 60 FPS (120, 240, 360, ilimitado). O limite
+// escolhido nas Definições é aplicado no próprio jogo (src/main.ts).
+app.commandLine.appendSwitch('disable-frame-rate-limit');
+app.commandLine.appendSwitch('disable-gpu-vsync');
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },

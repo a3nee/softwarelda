@@ -8,12 +8,16 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
-/** Vinheta suave e saturação ligeira, depois do tone mapping. */
+/**
+ * Acabamento "abonecado", depois do tone mapping: cores mais vivas, um contraste suave em S,
+ * sombras ligeiramente azuladas e luzes quentes (como num filme de animação) e uma vinheta suave.
+ */
 const Acabamento = {
   uniforms: {
     tDiffuse: { value: null },
-    vinheta: { value: 0.26 },
-    saturacao: { value: 1.04 },
+    vinheta: { value: 0.2 },
+    saturacao: { value: 1.22 },
+    contraste: { value: 0.18 },
   },
   vertexShader: /* glsl */ `
     varying vec2 vUv;
@@ -22,11 +26,16 @@ const Acabamento = {
     uniform sampler2D tDiffuse;
     uniform float vinheta;
     uniform float saturacao;
+    uniform float contraste;
     varying vec2 vUv;
     void main() {
       vec4 c = texture2D(tDiffuse, vUv);
       float l = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
-      c.rgb = mix(vec3(l), c.rgb, saturacao);
+      c.rgb = clamp(mix(vec3(l), c.rgb, saturacao), 0.0, 1.0);
+      // Curva em S (suave): mais "pop" sem esmagar os pretos nem queimar os brancos
+      c.rgb = mix(c.rgb, c.rgb * c.rgb * (3.0 - 2.0 * c.rgb), contraste);
+      // Sombras para o azul, luzes para o quente
+      c.rgb *= mix(vec3(0.95, 0.98, 1.06), vec3(1.03, 1.0, 0.96), smoothstep(0.1, 0.8, l));
       vec2 d = (vUv - 0.5) * vec2(1.15, 1.0);
       c.rgb *= mix(1.0 - vinheta, 1.0, smoothstep(0.85, 0.25, length(d)));
       gl_FragColor = c;
@@ -54,8 +63,9 @@ export class PosFx {
     this.composer = new EffectComposer(renderer, alvo);
     this.composer.addPass(new RenderPass(cena, camara));
     this.ao = new GTAOPass(cena, camara, innerWidth, innerHeight);
-    this.ao.updateGtaoMaterial({ radius: 0.35, distanceExponent: 1.6, thickness: 1.2, scale: 1.1, samples: 16 });
-    this.ao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 6, rings: 2, samples: 16 });
+    // A meia resolução (ver redimensionar) e com menos amostras: a oclusão é suave, não se nota a diferença.
+    this.ao.updateGtaoMaterial({ radius: 0.35, distanceExponent: 1.6, thickness: 1.2, scale: 1.1, samples: 8 });
+    this.ao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 5, rings: 2, samples: 8 });
     this.ao.blendIntensity = 0.9;
     const renderAO = this.ao.render.bind(this.ao);
     this.ao.render = (...args: Parameters<GTAOPass['render']>) => {
@@ -92,6 +102,8 @@ export class PosFx {
   redimensionar(largura: number, altura: number, pixelRatio: number): void {
     this.composer.setPixelRatio(pixelRatio);
     this.composer.setSize(largura, altura);
+    // O composer dá a resolução inteira a todos os passes; a oclusão chega bem a metade.
+    this.ao.setSize(Math.round((largura * pixelRatio) / 2), Math.round((altura * pixelRatio) / 2));
   }
 
   render(): void {

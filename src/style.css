@@ -719,3 +719,29 @@ input[type=range] { width: 100%; accent-color: var(--violeta); }
 .lancamento .ic-grande { color: #fff; }
 .titulo-jogo h1 { font-size: clamp(42px, 5vw, 66px); font-weight: 800; letter-spacing: -0.045em; white-space: nowrap; }
 .janela h2 { font-weight: 750; letter-spacing: -0.02em; }
+
+/* Bugs, horas extra, sequelas, eras e investigação */
+.produto { flex-wrap: wrap; }
+.linha-bugs { flex-basis: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--sub); border-top: 1px solid rgba(255, 255, 255, 0.06); padding-top: 6px; }
+.linha-bugs.aviso span { color: #fdba74; }
+.linha-bugs.mau span { color: #fca5a5; font-weight: 650; }
+.linha-bugs .em-patch { color: #93c5fd; }
+button.crunch { margin-top: 8px; padding: 7px; font-size: 12px; }
+button.crunch.ligado { background: rgba(248, 113, 113, 0.18); color: #fca5a5; box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.45); }
+.projeto.em-crunch { box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.45); }
+select.sequela { width: 100%; margin-bottom: 6px; }
+.opcao-check.bloqueada { opacity: 0.5; cursor: not-allowed; }
+.tag-era { font-size: 11px; vertical-align: -1px; }
+.tag-era.sobe, .tendencia.sobe { color: var(--verde); }
+.tag-era.desce, .tendencia.desce { color: #fca5a5; }
+.tendencia { font-size: 12px; margin: 3px 0; }
+.era .sub { color: var(--sub); font-size: 11px; display: block; margin-top: 6px; }
+.arvore { display: grid; gap: 6px; margin-bottom: 8px; }
+button.tecnologia { display: flex; align-items: center; gap: 10px; text-align: left; padding: 9px 10px; background: var(--sup-2); color: inherit; font-weight: 500; }
+button.tecnologia .ic { font-size: 17px; width: 22px; text-align: center; }
+button.tecnologia small { display: block; color: var(--sub); font-size: 10.5px; }
+button.tecnologia small.req { color: #fdba74; }
+button.tecnologia .custo { white-space: nowrap; font-weight: 650; }
+button.tecnologia.feita { background: rgba(52, 211, 153, 0.1); box-shadow: inset 0 0 0 1px rgba(52, 211, 153, 0.35); opacity: 1; }
+button.tecnologia.atual { background: rgba(139, 124, 246, 0.16); box-shadow: inset 0 0 0 1px rgba(139, 124, 246, 0.55); }
+button.tecnologia.bloq { opacity: 0.45; }

@@ -10,9 +10,16 @@ export interface Definicoes {
   sons: boolean;
   volume: number; // 0–1
   qualidade: Qualidade; // resolução do 3D
+  fpsMax: number; // limite de imagens por segundo (0 = ilimitado)
+  mostrarFps: boolean; // contador de FPS no canto do ecrã
 }
 
+/** Limites de FPS que o jogador pode escolher (0 = ilimitado). */
+export const LIMITES_FPS = [60, 120, 144, 240, 360, 0] as const;
+
 export const POR_OMISSAO: Definicoes = {
+  fpsMax: 60,
+  mostrarFps: false,
   sombras: true,
   cicloDia: true,
   indicadores: true,
@@ -32,6 +39,7 @@ export function lerDefinicoes(): Definicoes {
       if (typeof o[k] === typeof d[k]) (d as Record<string, unknown>)[k] = o[k];
     if (!['baixa', 'media', 'alta'].includes(d.qualidade)) d.qualidade = POR_OMISSAO.qualidade;
     d.volume = Math.max(0, Math.min(1, d.volume));
+    if (!(LIMITES_FPS as readonly number[]).includes(d.fpsMax)) d.fpsMax = POR_OMISSAO.fpsMax;
   } catch {
     // definições estragadas: ficam as de origem
   }
