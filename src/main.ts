@@ -34,6 +34,7 @@ import {
   CADEIRA_Z, Confetes, corFelicidade, criarCafe, criarMatraquilhos, criarPlanta, criarSecretaria, criarSofa, MAT, mat,
 } from './modelos.ts';
 import { ALTURA_INDICADOR, modelosDe, Pessoa } from './pessoas.ts';
+import { Passeio } from './passeio.ts';
 import { materialPBR, texturaNoMundo } from './recursos.ts';
 import { Ambiente, type EstadoCasa } from './ambiente.ts';
 import { guardarDefinicoes, lerDefinicoes, pixelRatio, type Definicoes } from './definicoes.ts';
@@ -577,7 +578,7 @@ function sincronizarFuncionarios(dt: number, agora: number): void {
     }
     const g = b.grupo;
     b.anel.visible = f.id === selecionado;
-    if (!f.dentro) {
+    if (!f.dentro || (f.dono && passeio.ativo)) {
       g.visible = false;
       g.position.set(f.x, 0, f.z);
       continue;
@@ -865,6 +866,7 @@ addEventListener('keydown', (ev) => {
   if (ev.key === 'Escape') {
     if (document.querySelector('.modal')) return;
     if (menus.ecra) menus.voltar();
+    else if (passeio.ativo) alternarPasseio();
     else if (pegado) {
       pegado = null;
       atualizarCursores(ultimoPonto);
@@ -877,6 +879,18 @@ addEventListener('keydown', (ev) => {
   if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 's') {
     ev.preventDefault();
     guardar();
+    return;
+  }
+  if (passeio.ativo) {
+    // A passear: E interage, P ou Esc volta ao escritório; as outras teclas são para andar.
+    if (ev.key.toLowerCase() === 'e') interagir();
+    else if (ev.key.toLowerCase() === 'p') alternarPasseio();
+    teclas.add(ev.key.toLowerCase());
+    if (ev.key === ' ') ev.preventDefault();
+    return;
+  }
+  if (ev.key.toLowerCase() === 'p' && !ev.ctrlKey && !ev.metaKey) {
+    alternarPasseio();
     return;
   }
   if (ev.key.toLowerCase() === 'm' && !ev.ctrlKey && !ev.metaKey) {
@@ -949,6 +963,96 @@ function atualizarBairro(): void {
   if (s.morada !== undefined) estadosCasas.set(s.morada, 'morada');
   ambiente.marcarCasas(estadosCasas);
   ambiente.estacionamento((s.carros ?? []).map((c) => CARROS[c.modelo].cor), s.funcionarios.filter((f) => f.dentro).length);
+}
+
+const passeio = new Passeio(cena, camara, () => ambiente.obstaculos);
+const dicaPasseio = el(`<div id="dica-passeio" class="ui vidro hud"></div>`);
+document.body.appendChild(dicaPasseio);
+let velocimetro = 0;
+
+/** Sai à rua com o teu personagem (ou volta ao escritório). */
+function alternarPasseio(): void {
+  if (montra || menus.ecra) return;
+  if (passeio.ativo) {
+    passeio.terminar();
+    s.aPassear = false;
+    ambiente.reporEstacionamento();
+    controlos.enabled = true;
+    document.body.classList.remove('a-passear');
+    camaraDeJogo();
+    atualizarUI();
+    return;
+  }
+  const eu = fundadorDe(s);
+  if (!eu?.aparencia) {
+    erro('Primeiro cria o teu personagem (separador Equipa).');
+    abrirEditorPersonagem();
+    return;
+  }
+  escolherFerramenta('selecionar');
+  selecionado = null;
+  // Sai pela porta de entrada, virado para fora do terreno.
+  const e = s.entrada;
+  const fora = e.x === 0 ? [-1.3, 0] : e.x === s.largura - 1 ? [1.3, 0] : e.z === 0 ? [0, -1.3] : [0, 1.3];
+  passeio.iniciar(eu.aparencia, eu.nome, e.x + fora[0], e.z + fora[1], Math.atan2(fora[0], fora[1]));
+  s.aPassear = true;
+  controlos.enabled = false;
+  document.body.classList.add('a-passear');
+  som.clique();
+}
+
+/** O que está ao alcance: um carro teu, uma casa ou a porta do escritório. */
+function alcance(): { tipo: 'carro'; lugar: number } | { tipo: 'casa'; id: number } | { tipo: 'escritorio' } | null {
+  const p = passeio.pos;
+  const e = s.entrada;
+  if (Math.hypot(p.x - e.x, p.z - e.z) < 2) return { tipo: 'escritorio' };
+  for (let k = 0; k < (s.carros?.length ?? 0); k++) {
+    const c = ambiente.carroDoLugar(k);
+    if (c && Math.hypot(c.position.x - p.x, c.position.z - p.z) < 2.2) return { tipo: 'carro', lugar: k };
+  }
+  for (let id = 0; id < 40; id++) {
+    const c = ambiente.centroCasa(id);
+    if (!c) break;
+    if (Math.hypot(c.x - p.x, c.z - p.z) < 5.2) return { tipo: 'casa', id };
+  }
+  return null;
+}
+
+function interagir(): void {
+  if (passeio.carro) {
+    passeio.sairDoCarro();
+    som.clique();
+    return;
+  }
+  const a = alcance();
+  if (!a) return;
+  if (a.tipo === 'escritorio') alternarPasseio();
+  else if (a.tipo === 'casa') abrirCasa(a.id);
+  else {
+    const obj = ambiente.carroDoLugar(a.lugar);
+    if (obj) {
+      passeio.entrarNoCarro(obj, a.lugar);
+      som.clique();
+    }
+  }
+}
+
+function atualizarPasseio(dt: number): void {
+  const eu = fundadorDe(s);
+  if (eu?.aparencia) passeio.pintar(eu.aparencia);
+  velocimetro = passeio.atualizar(dt, menus.ecra || pausasModais ? new Set() : teclas);
+  let texto: string;
+  if (passeio.carro) {
+    const c = s.carros?.[passeio.carro.lugar];
+    texto = `${ic('car')} <b>${c ? CARROS[c.modelo].nome : 'Carro'}</b> · ${velocimetro} km/h · <kbd>W</kbd><kbd>S</kbd> acelerar/travar · <kbd>A</kbd><kbd>D</kbd> virar · <kbd>E</kbd> sair do carro`;
+  } else {
+    const a = alcance();
+    const acao = !a ? '' : a.tipo === 'escritorio' ? ' · <kbd>E</kbd> entrar no escritório'
+      : a.tipo === 'carro' ? ` · <kbd>E</kbd> conduzir o ${CARROS[s.carros![a.lugar].modelo].nome.toLowerCase()}`
+      : ` · <kbd>E</kbd> ver a casa da ${esc(defCasa(a.id).morada)}`;
+    texto = `${ic('user-round')} <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> andar · <kbd>Shift</kbd> correr${acao} · <kbd>P</kbd> voltar`;
+  }
+  definir(dicaPasseio, texto);
 }
 
 function selecionarPessoa(id: number, focar: boolean): void {
@@ -1065,6 +1169,7 @@ const topo = el(`<div id="topo" class="ui hud">
   </div>
   <div class="grupo vidro direita">
     <span class="guardado"></span>
+    <button data-jogo="passear" class="passear" title="Sair à rua com o teu personagem (P)">${ic('user-round')} <span>Passear</span></button>
     <button data-jogo="guardar" class="icone" title="Guardar (Ctrl+S)">${ic('save')}</button>
     <button data-jogo="menu" class="icone" title="Menu (Esc)">${ic('menu')}</button>
   </div>
@@ -1084,6 +1189,7 @@ topo.addEventListener('click', (ev) => {
   som.clique();
   if (b.dataset.vel) velocidade = Number(b.dataset.vel);
   else if (b.dataset.jogo === 'guardar') guardar();
+  else if (b.dataset.jogo === 'passear') alternarPasseio();
   else if (b.dataset.jogo === 'menu') abrirPausa();
   else if (b.dataset.jogo === 'melhorias') abrirMelhorias();
   atualizarUI();
@@ -2558,6 +2664,13 @@ function contarFps(agora: number): void {
 
 /** Troca o jogo em curso; a cena e as escolhas da interface voltam a ser construídas a partir dele. */
 function usarEstado(novo: Estado, eMontra = false): void {
+  if (passeio.ativo) {
+    passeio.terminar();
+    ambiente.reporEstacionamento();
+    controlos.enabled = true;
+    document.body.classList.remove('a-passear');
+  }
+  delete novo.aPassear;
   s = novo;
   montra = eMontra;
   mesGuardado = mesDeJogo(s);
@@ -2716,7 +2829,8 @@ function ciclo(agora: number): void {
   sincronizarMapa();
   sincronizarFuncionarios(dt, agora);
   processarMensagensNovas();
-  moverCamara(dt);
+  if (passeio.ativo) atualizarPasseio(dt);
+  else moverCamara(dt);
   grelha.visible = !montra && ferramenta !== 'selecionar';
   cortarParedes(dt);
   ambiente.atualizar(dt, minutoDoDia(s) + acumulado, def.cicloDia);
@@ -2729,7 +2843,7 @@ function ciclo(agora: number): void {
     atualizarUI();
     ultimaUI = agora;
   }
-  controlos.update(dt);
+  if (!passeio.ativo) controlos.update(dt);
   posfx.intensidade(def.cicloDia ? ambiente.noite : 0);
   matVidro.emissiveIntensity = (def.cicloDia ? ambiente.noite : 0) * 0.35;
   // Sombras a 60 Hz na qualidade alta e a 30 nas outras, seja qual for o FPS: só as pessoas e os

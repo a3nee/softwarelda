@@ -477,6 +477,25 @@ export class Ambiente {
   private readonly lote: { x0: number; x1: number; z0: number; z1: number };
   private readonly lugares: { x: number; z: number; rot: number }[] = [];
   private readonly carrosLote: (THREE.Object3D | null)[] = [];
+  /** Retângulos dos edifícios (casas e prédios), onde não se pode andar nem conduzir. */
+  readonly obstaculos: { x0: number; x1: number; z0: number; z1: number }[] = [];
+
+  private obstaculo(o: THREE.Object3D): void {
+    const b = new THREE.Box3().setFromObject(o);
+    this.obstaculos.push({ x0: b.min.x, x1: b.max.x, z0: b.min.z, z1: b.max.z });
+  }
+
+  /** O carro estacionado no lugar k (os teus carros estão nos primeiros lugares). */
+  carroDoLugar(k: number): THREE.Object3D | null {
+    return this.carrosLote[k] ?? null;
+  }
+
+  /** Volta a pôr os carros nos lugares (depois de os conduzires). */
+  reporEstacionamento(): void {
+    this.carrosLote.forEach((c) => c && this.cena.remove(c));
+    this.carrosLote.fill(null);
+    this.assinaturaLote = '';
+  }
   private assinaturaLote = '';
 
   /** Casa do bairro debaixo do raio (ou null). */
@@ -755,6 +774,7 @@ export class Ambiente {
         this.cena.add(corpo);
         const idCasa = this.casas.length;
         corpo.userData.casa = idCasa;
+        this.obstaculo(corpo);
         // Soco de tijolo à volta da base
         const soco = new THREE.Mesh(uvEmMetros(new THREE.BoxGeometry(d + 0.06, 0.35, w + 0.06), d, 0.35, w, 3), tijolo);
         soco.position.set(xc, y0 + 0.175, z);
@@ -1031,6 +1051,7 @@ export class Ambiente {
       corpo.position.set(x, h / 2 - 0.12, z);
       corpo.castShadow = corpo.receiveShadow = true;
       this.cena.add(corpo);
+      this.obstaculo(corpo);
       const topo = new THREE.Mesh(new THREE.BoxGeometry(w + 0.12, 0.12, d + 0.12), telhado);
       topo.position.set(x, h - 0.06, z);
       topo.castShadow = true;

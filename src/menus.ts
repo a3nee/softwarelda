@@ -262,7 +262,7 @@ export class Menus {
       </div>
       <h3 class="titulo-atalhos">Atalhos</h3>
       <div class="atalhos">
-        <span><kbd>1</kbd>–<kbd>7</kbd> ferramentas</span><span><kbd>R</kbd> rodar mobília</span><span><kbd>Espaço</kbd> pausa</span><span><kbd>Esc</kbd> menu / cancelar</span>
+        <span><kbd>1</kbd>–<kbd>7</kbd> ferramentas</span><span><kbd>R</kbd> rodar mobília</span><span><kbd>P</kbd> passear (WASD, <kbd>E</kbd> conduzir / entrar)</span><span><kbd>Espaço</kbd> pausa</span><span><kbd>Esc</kbd> menu / cancelar</span>
         <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> mover a câmara</span><span><kbd>Q</kbd><kbd>E</kbd> rodar</span>
         <span>Botão direito: rodar · meio: arrastar · roda: zoom</span><span><kbd>Ctrl</kbd>+<kbd>S</kbd> guardar</span><span><kbd>M</kbd> melhorias</span>
       </div>

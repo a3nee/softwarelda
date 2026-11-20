@@ -785,3 +785,13 @@ button.mini.ligado { border-color: var(--acento); background: rgba(139, 124, 246
 .amostra { height: 28px; padding: 0; border-radius: 8px; border: 2px solid rgba(255, 255, 255, 0.12); }
 .amostra.ativo { border-color: #fff; box-shadow: 0 0 0 2px var(--acento); }
 @media (max-width: 720px) { .editor-personagem { grid-template-columns: 1fr; } .editor-personagem .previa { margin: 0 auto; } }
+
+/* ============ Passeio (a pé e de carro) ============ */
+#dica-passeio { display: none; position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); padding: 10px 16px;
+  border-radius: 12px; font-size: 13.5px; z-index: 8; white-space: nowrap; }
+#dica-passeio kbd { margin: 0 2px; }
+body.a-passear #dica-passeio { display: block; }
+body.a-passear #ferramentas, body.a-passear #objetos, body.a-passear #lateral, body.a-passear #missoes,
+body.a-passear #dica { display: none !important; }
+#topo button.passear { display: flex; align-items: center; gap: 6px; padding: 0 12px; height: 38px; border-radius: 10px; font-weight: 600; }
+body.a-passear #topo button.passear { background: var(--acento); color: #fff; }

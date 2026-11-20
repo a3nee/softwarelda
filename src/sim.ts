@@ -530,6 +530,7 @@ export interface Estado {
   casaAlugada?: number; // casa do bairro onde moras de renda
   morada?: number; // casa onde moras (tua ou alugada)
   carros?: Carro[]; // carros teus, no estacionamento do escritório
+  aPassear?: boolean; // o teu personagem saiu do escritório (não trabalha)
 }
 
 // ---------------------------------------------------------------------------
@@ -1845,6 +1846,8 @@ function minutoSeguinte(s: Estado): void {
           f.estado = 'aTrabalhar';
         }
       }
+    } else if (f.dono && s.aPassear) {
+      // A passear: não trabalha nem investiga.
     } else if (f.estado === 'aTrabalhar' && horario && f.projetoId !== null) {
       const p = s.projetos.find((o) => o.id === f.projetoId);
       if (p) {
@@ -3559,6 +3562,7 @@ function erroNosExtras(e: Obj): string | null {
     && ['curso', 'ganho', 'perdido'].includes(e.desafio.resultado as string)
     && (e.desafio.mesFim === undefined || inteiro(e.desafio.mesFim)))) return 'desafio';
   if (e.semFalencia !== undefined && typeof e.semFalencia !== 'boolean') return 'semFalencia';
+  if (e.aPassear !== undefined && typeof e.aPassear !== 'boolean') return 'passeio';
   return erroNoPatrimonio(e);
 }
 
