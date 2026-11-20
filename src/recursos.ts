@@ -13,6 +13,7 @@ export interface ModeloPessoa {
   nome: string;
   sexo: Sexo;
   cena: THREE.Object3D;
+  pasta: string; // pasta das texturas (modelos/pessoas/<pasta>/)
 }
 
 export interface AnimacoesSexo {
@@ -170,7 +171,7 @@ export async function carregarRecursos(progresso: (f: number) => void): Promise<
         ]);
         for (const t of [map, normalMap]) if (t) t.flipY = true, t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
         const cabelo = m.parte === 'cabelo';
-        materiais.set(nome, new THREE.MeshStandardMaterial({
+        const material = new THREE.MeshStandardMaterial({
           name: nome,
           map,
           normalMap,
@@ -179,7 +180,9 @@ export async function carregarRecursos(progresso: (f: number) => void): Promise<
           alphaTest: cabelo ? 0.45 : 0,
           alphaToCoverage: cabelo,
           side: cabelo ? THREE.DoubleSide : THREE.FrontSide,
-        }));
+        });
+        material.userData.parte = m.parte;
+        materiais.set(nome, material);
       }
       r.scene.traverse((o) => {
         const malha = o as THREE.SkinnedMesh;
@@ -190,7 +193,7 @@ export async function carregarRecursos(progresso: (f: number) => void): Promise<
         const troca = (x: THREE.Material) => materiais.get(x.name) ?? x;
         malha.material = Array.isArray(malha.material) ? malha.material.map(troca) : troca(malha.material);
       });
-      R.pessoas.push({ nome: p.nome, sexo: p.sexo, cena: r.scene });
+      R.pessoas.push({ nome: p.nome, sexo: p.sexo, cena: r.scene, pasta: p.ficheiro.replace(/\.glb$/, '') });
     });
   }
   for (const sexo of ['m', 'f'] as const) {

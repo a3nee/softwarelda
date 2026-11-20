@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { clone as clonarComEsqueleto } from 'three/addons/utils/SkeletonUtils.js';
 import { M, R, type Sexo } from './recursos.ts';
+import type { Aparencia } from './sim.ts';
 
 export type Pose = 'andar' | 'trabalhar' | 'parado' | 'festejar';
 
@@ -27,6 +28,57 @@ export function sexoDe(nome: string): Sexo {
   return FEMININOS.has(nome.split(' ')[0]) ? 'f' : 'm';
 }
 
+/** Máscaras da roupa (branco = roupa), uma por modelo; carregadas só quando são precisas. */
+const mascaras = new Map<string, THREE.Texture>();
+function mascaraDe(pasta: string): THREE.Texture {
+  let t = mascaras.get(pasta);
+  if (!t) {
+    t = new THREE.TextureLoader().load(`${import.meta.env.BASE_URL}modelos/pessoas/${pasta}/roupa_mascara.png`);
+    t.flipY = true;
+    t.colorSpace = THREE.NoColorSpace;
+    mascaras.set(pasta, t);
+  }
+  return t;
+}
+
+/** Modelos (Rocketbox) de um sexo, pela ordem do editor. */
+export function modelosDe(sexo: Sexo): number {
+  return R.pessoas.filter((p) => p.sexo === sexo).length;
+}
+
+interface Tinta {
+  uCor: { value: THREE.Color };
+  uForca: { value: number };
+  uModo: { value: number }; // 0 = tinge tudo, 1 = só a pele, 2 = usa a máscara da roupa
+  uPele: { value: THREE.Color };
+  uMascara: { value: THREE.Texture | null };
+}
+
+/** Cor para multiplicar a pele: −1 mais escura, 0 a do modelo, 1 mais clara. */
+function corPele(v: number, c = new THREE.Color()): THREE.Color {
+  return v < 0 ? c.setRGB(1 + 0.5 * v, 1 + 0.6 * v, 1 + 0.66 * v) : c.setRGB(1 + 0.12 * v, 1 + 0.1 * v, 1 + 0.08 * v);
+}
+
+/** Material com cabelo, roupa e pele tingidos (cópia: as outras pessoas não mudam). */
+function materialTingido(base: THREE.MeshStandardMaterial, tinta: Tinta): THREE.MeshStandardMaterial {
+  const m = base.clone();
+  m.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, tinta);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+uniform vec3 uCor; uniform float uForca; uniform float uModo; uniform vec3 uPele; uniform sampler2D uMascara;`)
+      .replace('#include <map_fragment>', `#include <map_fragment>
+#ifdef USE_MAP
+  float mk = uModo < 0.5 ? 1.0 : uModo < 1.5 ? 0.0 : texture2D(uMascara, vMapUv).r;
+  float lum = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
+  diffuseColor.rgb = mix(diffuseColor.rgb, uCor * (0.38 + lum * 1.7), mk * uForca);
+  diffuseColor.rgb *= mix(uPele, vec3(1.0), mk);
+#endif`);
+  };
+  m.customProgramCacheKey = () => 'tingido';
+  return m;
+}
+
 export class Pessoa {
   readonly grupo = new THREE.Group();
   readonly indicador: THREE.Mesh;
@@ -43,11 +95,37 @@ export class Pessoa {
   /** Unidades do mundo por segundo a que a animação de andar foi gravada. */
   private readonly passo: number;
 
-  constructor(id: number, nome: string) {
-    this.sexo = sexoDe(nome);
+  /** Tintas do personagem (só existe para quem tem aparência), para o editor mudar ao vivo. */
+  private tintas: { cabelo: Tinta; corpo: Tinta; cabeca: Tinta } | null = null;
+
+  constructor(id: number, nome: string, aparencia?: Aparencia) {
+    this.sexo = aparencia?.sexo ?? sexoDe(nome);
     const lista = R.pessoas.filter((p) => p.sexo === this.sexo);
-    const modelo = lista[(id * 7 + Math.floor(hash(id) * 3)) % lista.length];
+    const modelo = aparencia
+      ? lista[aparencia.modelo % lista.length]
+      : lista[(id * 7 + Math.floor(hash(id) * 3)) % lista.length];
     this.corpo = clonarComEsqueleto(modelo.cena);
+    if (aparencia) {
+      const nova = (modo: number, forca: number, mascara: THREE.Texture | null = null): Tinta => ({
+        uCor: { value: new THREE.Color() }, uForca: { value: forca }, uModo: { value: modo },
+        uPele: { value: new THREE.Color(1, 1, 1) }, uMascara: { value: mascara },
+      });
+      const tintas = { cabelo: nova(0, 0.88), corpo: nova(2, 0.8, mascaraDe(modelo.pasta)), cabeca: nova(1, 0) };
+      this.tintas = tintas;
+      const copias = new Map<THREE.Material, THREE.Material>();
+      this.corpo.traverse((o) => {
+        const malha = o as THREE.Mesh;
+        if (!malha.isMesh) return;
+        const troca = (x: THREE.Material) => {
+          const parte = x.userData.parte as 'cabelo' | 'corpo' | 'cabeca' | undefined;
+          if (!parte || !(x as THREE.MeshStandardMaterial).isMeshStandardMaterial) return x;
+          if (!copias.has(x)) copias.set(x, materialTingido(x as THREE.MeshStandardMaterial, tintas[parte]));
+          return copias.get(x)!;
+        };
+        malha.material = Array.isArray(malha.material) ? malha.material.map(troca) : troca(malha.material);
+      });
+      this.mudarCores(aparencia);
+    }
     this.corpo.scale.setScalar(0.01 * M); // modelos em centímetros
     this.grupo.add(this.corpo);
     this.fase = hash(id + 99);
@@ -77,6 +155,15 @@ export class Pessoa {
     this.anel.visible = false;
     this.grupo.add(this.anel);
     this.definirPose('parado');
+  }
+
+  /** Muda as cores (cabelo, roupa e pele) sem recriar o boneco. */
+  mudarCores(a: Aparencia): void {
+    if (!this.tintas) return;
+    this.tintas.cabelo.uCor.value.setHex(a.cabelo);
+    this.tintas.corpo.uCor.value.setHex(a.roupa);
+    corPele(a.pele, this.tintas.corpo.uPele.value);
+    corPele(a.pele, this.tintas.cabeca.uPele.value);
   }
 
   private definirPose(pose: Pose): void {

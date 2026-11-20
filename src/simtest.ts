@@ -3,7 +3,8 @@
 // Cada cenário é um "jogador" automático, corrido com várias sementes.
 // Termina com erro se alguma meta de equilíbrio falhar.
 import {
-  avancar, colocarSecretaria, moverMovel, rodarMovel, contratar, ECON, fatorMercado, iniciarProjeto, capacidadeServidor, potencialUtilizadores, pagantesDe, definirPlano, plataformaDe, updateDe, eProdutoNovo, funcionalidadesParaUpdate, iniciarUpdate, cargaServidor, SERVIDORES, mudarServidor, LISTA_TIPOS, MIN_POR_DIA, DIAS_POR_MES,
+  avancar, colocarSecretaria, moverMovel, rodarMovel, APARENCIA_INICIAL, fundadorDe, criarFundador, despedir, valorCasa, comprarCasa, arrendarCasa, alugarCasa, rendasRecebidas, rendaCasa,
+  custosPatrimonio, comprarCarro, prestigio, valorCarro, CARROS, PATRIMONIO, venderCasa, contratar, ECON, fatorMercado, iniciarProjeto, capacidadeServidor, potencialUtilizadores, pagantesDe, definirPlano, plataformaDe, updateDe, eProdutoNovo, funcionalidadesParaUpdate, iniciarUpdate, cargaServidor, SERVIDORES, mudarServidor, LISTA_TIPOS, MIN_POR_DIA, DIAS_POR_MES,
   MIN_POR_MES, novoJogo, textoData, tipoDisponivel, TIPOS, validarFuncionalidades, vendasIniciais,
   AREAS, competenciaMedia, definirEquipa, estimarProjeto, membrosDe, semProjeto,
   funcionalidadeDisponivel, iniciarManutencao, manutencaoDe, vendasComBugs, fatorBugs, alternarCrunch, deBaixa,
@@ -554,6 +555,48 @@ const ids = (s: Estado) => s.funcionarios.map((f) => f.id);
   meta(`Escritórios: a ${ESCRITORIOS[0].nome} tem a entrada lá dentro e não se constrói fora; mudar alarga e custa mais renda`,
     dentroDoEscritorio(s, s.entrada.x, s.entrada.z) && !fora.ok && mudou && colocarSecretaria(s, l.x1 + 1, l.z0).ok
     && rendaDe(s) > renda0 && !mudarEscritorio(s, 1).ok);
+}
+
+{
+  // Património: comprar, arrendar, morar, alugar, vender casas e carros.
+  const s = novoJogo(26, 24, 18, { missoes: false });
+  s.dinheiro = 2_000_000;
+  const preco = valorCasa(s, 3);
+  const comprou = comprarCasa(s, 3).ok && s.dinheiro === 2_000_000 - preco && s.morada === 3;
+  const naoArrendaMorada = !arrendarCasa(s, 3, true).ok;
+  const aluga = alugarCasa(s, 7).ok && s.morada === 7 && s.casaAlugada === 7;
+  const arrenda = arrendarCasa(s, 3, true).ok && rendasRecebidas(s) === rendaCasa(s, 3);
+  const custos = custosPatrimonio(s) >= rendaCasa(s, 7);
+  const carro = comprarCarro(s, 'desportivo').ok && prestigio(s) > 0;
+  const antesValor = valorCasa(s, 3);
+  avancar(s, MIN_POR_DIA * DIAS_POR_MES * 12);
+  const valoriza = valorCasa(s, 3) > antesValor && valorCarro(s, s.carros![0]) < CARROS.desportivo.preco * PATRIMONIO.carroNovo;
+  const volta = importarJogo(exportarJogo(s));
+  const guardado = volta.ok && volta.estado.imoveis?.[0].arrendada === true && volta.estado.casaAlugada === 7 && volta.estado.carros?.length === 1;
+  const dinheiroAntes = s.dinheiro;
+  const vende = venderCasa(s, 3).ok && s.dinheiro > dinheiroAntes && !s.imoveis!.length;
+  meta('Património: compra, arrenda, aluga, valoriza, guarda e vende casas e carros',
+    comprou && naoArrendaMorada && aluga && arrenda && custos && carro && valoriza && guardado && vende);
+  const lugares = novoJogo(27, 24, 18, { missoes: false });
+  lugares.dinheiro = 1e7;
+  for (let i = 0; i < PATRIMONIO.lugares; i++) comprarCarro(lugares, 'citadino');
+  meta(`Património: o estacionamento leva ${PATRIMONIO.lugares} carros`, !comprarCarro(lugares, 'citadino').ok);
+}
+
+{
+  // O teu personagem: trabalha sem salário, não se despede e fica guardado.
+  const s = novoJogo(28, 24, 18, { missoes: false, fundador: { nome: 'Ana', aparencia: { ...APARENCIA_INICIAL, sexo: 'f', cabelo: 0xd9b26a } } });
+  const eu = fundadorDe(s)!;
+  colocarSecretaria(s, 3, 4);
+  iniciarProjeto(s, 'Sozinho', 'utilitario', [], [eu.id]);
+  avancar(s, MIN_POR_DIA * 3);
+  const trabalhou = s.projetos[0].trabalhoFeito > 0;
+  const volta = importarJogo(exportarJogo(s));
+  meta('Personagem: o fundador trabalha sozinho, sem salário, não se despede e o aspeto fica guardado',
+    eu.salario === 0 && eu.secretariaId !== null && trabalhou && !despedir(s, eu.id).ok
+    && volta.ok && volta.estado.funcionarios[0].aparencia?.cabelo === 0xd9b26a
+    && criarFundador(s, 'Ana Silva', { ...eu.aparencia!, roupa: 0xc0161d }).ok && fundadorDe(s)!.nome === 'Ana Silva'
+    && s.funcionarios.filter((f) => f.dono).length === 1);
 }
 
 {

@@ -4,6 +4,9 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import {
   AREAS, alvoFelicidade, arestaMaisProxima, avancar, cancelarProjeto, colocarObjeto, colocarParedes, colocarPorta, limiteSecretarias, moverMovel, rodarMovel,
+  alugarCasa, arrendarCasa, CARROS, comprarCarro, comprarCasa, custosPatrimonio, defCasa, deixarAluguer, imovelDe,
+  LISTA_CARROS, morarEm, PATRIMONIO, prestigio, rendaCasa, rendasRecebidas, valorCarro, valorCasa, valorPatrimonio,
+  venderCarro, venderCasa, type IdCarro, APARENCIA_INICIAL, criarFundador, fundadorDe, type Aparencia,
   colocarSecretaria, comDependencias, CONQUISTAS, contratar, definirEquipa, demolirArestas, despedir, detetarSalas,
   ECON, eficienciaEquipa, estimarProjeto, euros, exportarJogo, fatorMercado, gerarCandidatos, importarJogo,
   iniciarProjeto, lerAresta, LISTA_OBJETOS, LISTA_TIPOS, membrosDe, mensagem, mesDeJogo, mesesRestantes, MIN_POR_DIA, MIN_POR_MES,
@@ -30,9 +33,9 @@ import {
 import {
   CADEIRA_Z, Confetes, corFelicidade, criarCafe, criarMatraquilhos, criarPlanta, criarSecretaria, criarSofa, MAT, mat,
 } from './modelos.ts';
-import { ALTURA_INDICADOR, Pessoa } from './pessoas.ts';
+import { ALTURA_INDICADOR, modelosDe, Pessoa } from './pessoas.ts';
 import { materialPBR, texturaNoMundo } from './recursos.ts';
-import { Ambiente } from './ambiente.ts';
+import { Ambiente, type EstadoCasa } from './ambiente.ts';
 import { guardarDefinicoes, lerDefinicoes, pixelRatio, type Definicoes } from './definicoes.ts';
 import { configurarSom, som } from './som.ts';
 import { desenharGrafico } from './grafico.ts';
@@ -534,6 +537,7 @@ function mostrarModelo(chave: string, x: number, z: number, valido: boolean, rot
 // ---------------------------------------------------------------------------
 
 const bonecos = new Map<number, Pessoa>();
+const formaBoneco = new Map<number, string>();
 const idDoGrupo = new WeakMap<THREE.Object3D, number>();
 let selecionado: number | null = null;
 
@@ -556,8 +560,16 @@ function sincronizarFuncionarios(dt: number, agora: number): void {
   for (const f of s.funcionarios) {
     vivos.add(f.id);
     let b = bonecos.get(f.id);
+    const forma = f.aparencia ? `${f.aparencia.sexo}${f.aparencia.modelo}` : '';
+    if (b && formaBoneco.get(f.id) !== forma) {
+      cena.remove(b.grupo);
+      bonecos.delete(f.id);
+      b = undefined;
+    }
+    if (b && f.aparencia) b.mudarCores(f.aparencia);
     if (!b) {
-      b = new Pessoa(f.id, f.nome);
+      b = new Pessoa(f.id, f.nome, f.aparencia);
+      formaBoneco.set(f.id, forma);
       b.grupo.position.set(f.x, 0, f.z);
       cena.add(b.grupo);
       bonecos.set(f.id, b);
@@ -762,6 +774,7 @@ function resultado(r: Resultado, somOk?: () => void): void {
 
 renderer.domElement.addEventListener('pointermove', (ev) => {
   ultimoPonto = pontoNoChao(ev);
+  if (ferramenta === 'selecionar') renderer.domElement.style.cursor = ambiente.casaEm(raio) !== null ? 'pointer' : '';
   atualizarCursores(ultimoPonto);
 });
 
@@ -773,10 +786,12 @@ renderer.domElement.addEventListener('pointerdown', (ev) => {
   const z = Math.round(p.z);
   if (ferramenta === 'selecionar') {
     const id = funcionarioEm(ev);
+    const casa = id === null ? ambiente.casaEm(raio) : null;
     if (id !== null) {
       som.clique();
       selecionarPessoa(id, false);
-    } else selecionado = null;
+    } else if (casa !== null) abrirCasa(casa);
+    else selecionado = null;
     atualizarUI();
     return;
   }
@@ -896,8 +911,8 @@ addEventListener('blur', () => teclas.clear());
 
 function moverAlvo(d: THREE.Vector3): void {
   const t = controlos.target.clone().add(d);
-  t.x = Math.max(-8, Math.min(LARGURA + 8, t.x));
-  t.z = Math.max(-8, Math.min(ALTURA + 8, t.z));
+  t.x = Math.max(-12, Math.min(LARGURA + 40, t.x));
+  t.z = Math.max(-70, Math.min(ALTURA + 72, t.z));
   const real = t.sub(controlos.target);
   controlos.target.add(real);
   camara.position.add(real);
@@ -925,6 +940,15 @@ function moverCamara(dt: number): void {
     if (d.length() < 0.05) focoCamara = null;
     else moverAlvo(d.multiplyScalar(Math.min(1, dt * 5)));
   }
+}
+
+const estadosCasas = new Map<number, EstadoCasa>();
+function atualizarBairro(): void {
+  estadosCasas.clear();
+  for (const i of s.imoveis ?? []) estadosCasas.set(i.id, i.arrendada ? 'arrendada' : 'tua');
+  if (s.morada !== undefined) estadosCasas.set(s.morada, 'morada');
+  ambiente.marcarCasas(estadosCasas);
+  ambiente.estacionamento((s.carros ?? []).map((c) => CARROS[c.modelo].cor), s.funcionarios.filter((f) => f.dentro).length);
 }
 
 function selecionarPessoa(id: number, focar: boolean): void {
@@ -1344,6 +1368,20 @@ lateral.addEventListener('click', async (ev) => {
     const encaixe = Math.round(avaliarEmpresa(s).total * BOLSA.parteVendida * (1 - s.participacao));
     if (await confirmar(`Entrar em bolsa e vender <b>${Math.round(BOLSA.parteVendida * 100)}%</b> da tua parte por <b>${euros(encaixe)}</b>?<br><small>Os acionistas ficam com essa parte do lucro. Só se faz uma vez.</small>`, 'Entrar em bolsa'))
       resultado(entrarEmBolsa(s), som.dinheiro);
+  } else if (a === 'personagem') {
+    abrirEditorPersonagem();
+  } else if (a === 'casa') {
+    abrirCasa(Number(b.dataset.id));
+  } else if (a === 'ver-bairro') {
+    focoCamara = new THREE.Vector3(LARGURA + 22, 0, ALTURA / 2);
+  } else if (a === 'comprar-carro') {
+    const d = CARROS[b.dataset.modelo as IdCarro];
+    if (await confirmar(`Comprar um carro <b>${d.nome.toLowerCase()}</b> por <b>${euros(d.preco)}</b>?<br><small>Manutenção: ${euros(d.preco * PATRIMONIO.manutencaoCarro)}/mês. Perde ${Math.round((1 - PATRIMONIO.carroNovo) * 100)}% do valor mal sai do stand.</small>`, 'Comprar'))
+      resultado(comprarCarro(s, b.dataset.modelo as IdCarro), som.dinheiro);
+  } else if (a === 'vender-carro') {
+    const c = s.carros?.find((o) => o.id === Number(b.dataset.id));
+    if (c && await confirmar(`Vender o carro <b>${CARROS[c.modelo].nome.toLowerCase()}</b> por <b>${euros(valorCarro(s, c))}</b>?`, 'Vender'))
+      resultado(venderCarro(s, c.id), som.dinheiro);
   } else if (a === 'feira') {
     resultado(irAFeira(s, b.dataset.feira!), som.dinheiro);
   } else if (a === 'formacao') {
@@ -1732,6 +1770,7 @@ function htmlEmpresa(): string {
   return `<div class="cartao"><h3>${ic('building-2')} Escritório <small>${atual === undefined ? 'terreno todo' : ESCRITORIOS[atual].nome}</small></h3>
       <div class="nota">Só podes construir dentro do escritório (o chão escuro ainda não é teu). Muda-te para um maior quando a equipa crescer.</div>
       ${escritorios}</div>
+    ${htmlPatrimonio()}
     <div class="cartao"><h3>${ic('presentation')} Feiras e eventos <small>uma vez por ano</small></h3>
       <div class="nota">Mostrar o trabalho numa feira dá expectativa aos projetos em curso e vendas aos produtos.</div>${feiras}</div>
     <div class="cartao"><h3>${ic('briefcase')} Aquisições <small>${subs ? `${s.subsidiarias!.length} subsidiária(s)` : 'nenhuma'}</small></h3>
@@ -1740,12 +1779,253 @@ function htmlEmpresa(): string {
     <div class="cartao"><h3>${ic('chart-line')} Bolsa <small>${s.bolsa ? 'cotada' : 'ainda não'}</small></h3>${bolsa}</div>`;
 }
 
+function estadoCasa(id: number): string {
+  const i = imovelDe(s, id);
+  if (s.morada === id) return i ? 'Tua · moras aqui' : 'Alugada · moras aqui';
+  if (i) return i.arrendada ? 'Tua · arrendada' : 'Tua · vazia';
+  return 'À venda';
+}
+
+function htmlPatrimonio(): string {
+  const casas = [...(s.imoveis ?? []).map((i) => i.id), ...(s.casaAlugada !== undefined ? [s.casaAlugada] : [])];
+  const listaCasas = casas.map((id) => {
+    const d = defCasa(id);
+    return `<div class="lugar"><span class="pos">${ic(imovelDe(s, id)?.arrendada ? 'key-round' : 'house')}</span>
+      <span class="cresce"><b>${esc(d.morada)}</b><small>${d.tipologia} · ${estadoCasa(id)} · vale ${compacto(valorCasa(s, id))}</small></span>
+      <button class="mini" data-acao="casa" data-id="${id}">Abrir</button></div>`;
+  }).join('');
+  const carros = (s.carros ?? []).map((c) => {
+    const d = CARROS[c.modelo];
+    return `<div class="lugar"><span class="pos" style="color:#${d.cor.toString(16).padStart(6, '0')}">${ic('car')}</span>
+      <span class="cresce"><b>${d.nome}</b><small>vale ${euros(valorCarro(s, c))}</small></span>
+      <button class="mini perigo" data-acao="vender-carro" data-id="${c.id}">Vender</button></div>`;
+  }).join('');
+  const cheio = (s.carros?.length ?? 0) >= PATRIMONIO.lugares;
+  const stand = LISTA_CARROS.map((m) => {
+    const d = CARROS[m];
+    const pode = !cheio && s.dinheiro >= d.preco;
+    return `<div class="ronda ${pode ? 'pode' : ''}"><span class="cresce"><b>${d.nome}</b><small>${esc(d.descricao)} · ${euros(d.preco)}</small></span>
+      <button class="mini ${pode ? 'primario' : ''}" data-acao="comprar-carro" data-modelo="${m}" ${pode ? '' : 'disabled'}>Comprar</button></div>`;
+  }).join('');
+  const morada = s.morada === undefined ? 'Ainda não tens casa.' : `Moras na ${esc(defCasa(s.morada).morada)}.`;
+  return `<div class="cartao"><h3>${ic('house')} Casas <small>prestígio ${Math.round(prestigio(s) * 100)}%</small></h3>
+      <div class="resumo">
+        <div><small>Património</small><b>${compacto(valorPatrimonio(s))}</b></div>
+        <div><small>Rendas</small><b class="bom">+${euros(rendasRecebidas(s))}</b></div>
+        <div><small>Custos</small><b>${euros(custosPatrimonio(s))}</b></div>
+      </div>
+      <div class="nota">${morada} Clica numa casa do bairro (do outro lado do estacionamento) para a comprar, alugar ou arrendar. Onde moras e os teus carros dão prestígio: aparecem candidatos melhores.</div>
+      ${listaCasas ? `<div class="ranking">${listaCasas}</div>` : ''}
+      <button class="largo" data-acao="ver-bairro">${ic('house')} Ver o bairro</button></div>
+    <div class="cartao"><h3>${ic('car')} Carros <small>${s.carros?.length ?? 0}/${PATRIMONIO.lugares} lugares</small></h3>
+      <div class="nota">Ficam no estacionamento ao lado do escritório, junto aos carros da equipa.</div>
+      ${carros ? `<div class="ranking">${carros}</div>` : ''}${stand}</div>`;
+}
+
+/** Janela de uma casa do bairro: comprar, alugar, arrendar, morar ou vender. */
+function abrirCasa(id: number): void {
+  if (document.querySelector('#j-casa')) return;
+  som.clique();
+  pausasModais++;
+  const j = el(`<div class="modal" id="j-casa"></div>`);
+  const desenhar = () => {
+    const d = defCasa(id);
+    const i = imovelDe(s, id);
+    const valor = valorCasa(s, id);
+    const renda = rendaCasa(s, id);
+    const botoes: string[] = [];
+    if (!i) {
+      botoes.push(`<button class="primario" data-c="comprar" ${s.dinheiro >= valor ? '' : 'disabled'}>${ic('circle-dollar-sign')} Comprar ${compacto(valor)}</button>`);
+      if (s.casaAlugada === id) botoes.push(`<button class="perigo" data-c="sair">Deixar a casa</button>`);
+      else botoes.push(`<button data-c="alugar" ${s.dinheiro >= renda ? '' : 'disabled'}>${ic('key-round')} Alugar para morar</button>`);
+    } else {
+      if (s.morada !== id && !i.arrendada) botoes.push(`<button data-c="morar">${ic('house')} Morar aqui</button>`);
+      if (i.arrendada) botoes.push(`<button data-c="desarrendar">Acabar o arrendamento</button>`);
+      else if (s.morada !== id) botoes.push(`<button class="primario" data-c="arrendar">${ic('key-round')} Arrendar (+${euros(renda)}/mês)</button>`);
+      const recebe = Math.round(valor * (1 - PATRIMONIO.comissaoVenda));
+      const lucro = recebe - i.compradaPor;
+      botoes.push(`<button class="perigo" data-c="vender" title="${lucro >= 0 ? 'Ganhas' : 'Perdes'} ${euros(Math.abs(lucro))} face ao que pagaste">Vender por ${compacto(recebe)}</button>`);
+    }
+    j.innerHTML = `<div class="janela estreita">
+      <h2>${ic('house')} ${esc(d.morada)}</h2>
+      <div class="resumo">
+        <div><small>Casa</small><b>${d.tipologia} · ${d.area} m²</b></div>
+        <div><small>Valor</small><b>${euros(valor)}</b></div>
+        <div><small>Renda</small><b>${euros(renda)}/mês</b></div>
+      </div>
+      <div class="nota"><b>${estadoCasa(id)}.</b> As casas valorizam ${Math.round(PATRIMONIO.valorizacaoAno * 100)}% por ano. Sendo tua, pagas ${euros(valor * PATRIMONIO.encargosMes)}/mês de IMI e obras; arrendada, recebes a renda no fecho de cada mês. Ao vender, a imobiliária fica com ${Math.round(PATRIMONIO.comissaoVenda * 100)}%.</div>
+      <div class="linha-botoes">${botoes.join('')}<button data-fechar>Fechar</button></div></div>`;
+  };
+  const tecla = (ev: KeyboardEvent) => {
+    if (ev.key !== 'Escape') return;
+    ev.stopPropagation();
+    ev.preventDefault();
+    fechar();
+  };
+  const fechar = () => {
+    j.remove();
+    pausasModais = Math.max(0, pausasModais - 1);
+    removeEventListener('keydown', tecla, true);
+  };
+  addEventListener('keydown', tecla, true);
+  j.addEventListener('click', async (ev) => {
+    const alvo = ev.target as HTMLElement;
+    if (alvo === j || alvo.closest('[data-fechar]')) {
+      som.clique();
+      return fechar();
+    }
+    const b = alvo.closest('[data-c]') as HTMLElement | null;
+    if (!b) return;
+    const c = b.dataset.c;
+    if (c === 'comprar') resultado(comprarCasa(s, id), som.dinheiro);
+    else if (c === 'alugar') resultado(alugarCasa(s, id), som.dinheiro);
+    else if (c === 'sair') resultado(deixarAluguer(s), som.clique);
+    else if (c === 'morar') resultado(morarEm(s, id), som.clique);
+    else if (c === 'arrendar') resultado(arrendarCasa(s, id, true), som.dinheiro);
+    else if (c === 'desarrendar') resultado(arrendarCasa(s, id, false), som.clique);
+    else if (c === 'vender') {
+      j.style.display = 'none';
+      const sim = await confirmar(`Vender a casa da <b>${esc(defCasa(id).morada)}</b> por <b>${euros(Math.round(valorCasa(s, id) * (1 - PATRIMONIO.comissaoVenda)))}</b>?`, 'Vender');
+      j.style.display = '';
+      if (sim) resultado(venderCasa(s, id), som.dinheiro);
+    }
+    desenhar();
+    atualizarUI();
+  });
+  desenhar();
+}
+
+const CORES_CABELO = [0x17110d, 0x3b2a1e, 0x6b4428, 0x9a5b2e, 0xb8742f, 0xd9b26a, 0xe8d6a8, 0x8f8a86, 0xe6e3de, 0x3b5bd9, 0xd94f8a, 0x2fa36b];
+const CORES_ROUPA = [0x2f6fb8, 0x1f3a6e, 0x17181c, 0xf2f2ee, 0x8c8c8c, 0xc0161d, 0xe0b23a, 0x2f8f6a, 0x7a4fd1, 0xe07a2f, 0xd94f8a, 0x6b4428];
+const hex = (c: number) => `#${c.toString(16).padStart(6, '0')}`;
+
+/** Editor do teu personagem: nome, modelo, cabelo, roupa e pele, com pré-visualização 3D a rodar. */
+function abrirEditorPersonagem(): void {
+  if (montra || document.querySelector('#j-personagem')) return;
+  const dono = fundadorDe(s);
+  const a: Aparencia = { ...(dono?.aparencia ?? APARENCIA_INICIAL) };
+  let nome = dono?.nome ?? '';
+  pausasModais++;
+  const j = el(`<div class="modal" id="j-personagem"><div class="janela personagem">
+    <h2>${ic('user-round')} O teu personagem</h2>
+    <div class="editor-personagem">
+      <canvas class="previa" width="300" height="400"></canvas>
+      <div class="opcoes-personagem"></div>
+    </div>
+    <div class="linha-botoes"><button data-p="fechar">${dono ? 'Cancelar' : 'Mais tarde'}</button><button data-p="guardar" class="primario">${ic('check')} ${dono ? 'Guardar' : 'Criar personagem'}</button></div>
+  </div></div>`);
+  const opcoes = j.querySelector('.opcoes-personagem') as HTMLElement;
+  const canvas = j.querySelector('canvas') as HTMLCanvasElement;
+
+  // Pré-visualização: uma cena pequena só com o boneco a rodar devagar
+  const r3 = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+  r3.setPixelRatio(Math.min(2, devicePixelRatio));
+  r3.toneMapping = THREE.NeutralToneMapping;
+  const c3 = new THREE.Scene();
+  c3.add(new THREE.HemisphereLight(0xdfe8ff, 0x5a4a3a, 1.6));
+  const luz = new THREE.DirectionalLight(0xfff2e0, 2.4);
+  luz.position.set(1.5, 3, 2.5);
+  c3.add(luz);
+  const cam = new THREE.PerspectiveCamera(30, 300 / 400, 0.05, 20);
+  cam.position.set(0, 0.66, 2.15);
+  cam.lookAt(0, 0.56, 0);
+  let boneco: Pessoa | null = null;
+  let forma = '';
+  const montar = () => {
+    if (forma !== `${a.sexo}${a.modelo}`) {
+      if (boneco) c3.remove(boneco.grupo);
+      boneco = new Pessoa(0, nome, a);
+      boneco.indicador.visible = false;
+      c3.add(boneco.grupo);
+      forma = `${a.sexo}${a.modelo}`;
+    } else boneco!.mudarCores(a);
+  };
+  let ultimo = performance.now();
+  let vivo = true;
+  const animar = (agora: number) => {
+    if (!vivo) return;
+    const dt = Math.min(0.1, (agora - ultimo) / 1000);
+    ultimo = agora;
+    if (boneco) {
+      boneco.grupo.rotation.y += dt * 0.6;
+      boneco.atualizar(dt, 'parado', 0, false);
+    }
+    r3.render(c3, cam);
+    requestAnimationFrame(animar);
+  };
+
+  const desenhar = () => {
+    const n = modelosDe(a.sexo);
+    const amostras = (lista: number[], campo: 'cabelo' | 'roupa') => lista.map((c) =>
+      `<button class="amostra ${a[campo] === c ? 'ativo' : ''}" data-cor="${campo}" data-v="${c}" style="background:${hex(c)}" title="${hex(c)}"></button>`).join('');
+    opcoes.innerHTML = `<label class="campo"><span>Nome</span><input type="text" data-p="nome" maxlength="24" placeholder="O teu nome" value="${esc(nome)}"></label>
+      <div class="rotulo">Corpo</div>
+      <div class="linha-botoes"><button class="mini ${a.sexo === 'm' ? 'ligado' : ''}" data-sexo="m">Homem</button><button class="mini ${a.sexo === 'f' ? 'ligado' : ''}" data-sexo="f">Mulher</button></div>
+      <div class="linha-botoes preco"><button class="mini" data-modelo="-1">${ic('chevron-left')}</button><b>Rosto ${a.modelo % n + 1} de ${n}</b><button class="mini" data-modelo="1">${ic('chevron-right')}</button></div>
+      <div class="rotulo">Tom de pele</div>
+      <input type="range" data-p="pele" min="-100" max="100" value="${Math.round(a.pele * 100)}">
+      <div class="rotulo">Cabelo</div><div class="amostras">${amostras(CORES_CABELO, 'cabelo')}</div>
+      <div class="rotulo">Roupa</div><div class="amostras">${amostras(CORES_ROUPA, 'roupa')}</div>
+      <div class="nota">O teu personagem trabalha nos projetos como os outros (sem salário) e não pode ser despedido. Precisa de uma secretária.</div>`;
+    montar();
+  };
+  const fechar = () => {
+    vivo = false;
+    r3.dispose();
+    j.remove();
+    pausasModais = Math.max(0, pausasModais - 1);
+    removeEventListener('keydown', tecla, true);
+  };
+  const tecla = (ev: KeyboardEvent) => {
+    if (ev.key !== 'Escape') return;
+    ev.stopPropagation();
+    ev.preventDefault();
+    fechar();
+  };
+  addEventListener('keydown', tecla, true);
+  j.addEventListener('input', (ev) => {
+    const i = ev.target as HTMLInputElement;
+    if (i.dataset.p === 'nome') nome = i.value;
+    if (i.dataset.p === 'pele') {
+      a.pele = Number(i.value) / 100;
+      montar();
+    }
+  });
+  j.addEventListener('click', (ev) => {
+    const b = (ev.target as HTMLElement).closest('button') as HTMLButtonElement | null;
+    if (!b) return;
+    som.clique();
+    if (b.dataset.p === 'fechar') return fechar();
+    if (b.dataset.p === 'guardar') {
+      const r = criarFundador(s, nome, a);
+      resultado(r);
+      if (r.ok) {
+        fechar();
+        atualizarUI();
+      }
+      return;
+    }
+    if (b.dataset.sexo) {
+      a.sexo = b.dataset.sexo as 'm' | 'f';
+      a.modelo = 0;
+    } else if (b.dataset.modelo) {
+      const n = modelosDe(a.sexo);
+      a.modelo = (a.modelo + Number(b.dataset.modelo) + n) % n;
+    } else if (b.dataset.cor) a[b.dataset.cor as 'cabelo' | 'roupa'] = Number(b.dataset.v);
+    desenhar();
+  });
+  desenhar();
+  requestAnimationFrame(animar);
+}
+
 function htmlEquipa(): string {
+  const semDono = !fundadorDe(s) ? `<div class="cartao"><div class="nota">${ic('user-round')} Ainda não tens personagem. Cria-o: trabalha nos projetos como os outros, sem salário.</div>
+    <button class="primario largo" data-acao="personagem">${ic('user-round')} Criar o teu personagem</button></div>` : '';
   const salarios = s.funcionarios.reduce((t, f) => t + f.salario, 0);
   const media = s.funcionarios.length ? s.funcionarios.reduce((t, f) => t + f.felicidade, 0) / s.funcionarios.length : 0;
   const opcoes = (f: Funcionario) => [`<option value="" ${f.projetoId === null ? 'selected' : ''}>Sem projeto (investiga)</option>`,
     ...s.projetos.map((p) => `<option value="${p.id}" ${f.projetoId === p.id ? 'selected' : ''}>${esc(p.nome)}</option>`)].join('');
-  return `<div class="resumo">
+  return `${semDono}<div class="resumo">
       <div><small>Pessoas</small><b>${s.funcionarios.length}</b></div>
       <div><small>Salários</small><b>${euros(salarios)}</b></div>
       <div><small>Felicidade</small><b style="color:${COR_FEL(media)}">${s.funcionarios.length ? Math.round(media) : '—'}</b></div>
@@ -1758,7 +2038,7 @@ function htmlEquipa(): string {
         ${barrasCompetencias(f.competencias)}
         <div class="linha sub"><span style="color:${COR_FEL(f.felicidade)}">${CARA_FEL(f.felicidade)} ${Math.round(f.felicidade)}</span><span>${euros(f.salario)}/mês</span></div>
         <div class="linha"><select data-equipa="${f.id}" class="${f.projetoId === null ? 'aviso' : ''}">${opcoes(f)}</select>
-          <button class="mini perigo" data-acao="despedir" data-id="${f.id}">Despedir</button></div>
+          ${f.dono ? `<button class="mini" data-acao="personagem">${ic('palette')} Editar</button>` : `<button class="mini perigo" data-acao="despedir" data-id="${f.id}">Despedir</button>`}</div>
       </div></div>`).join('')}`;
 }
 
@@ -2365,6 +2645,7 @@ const menus = new Menus({
     // Passa a ser o jogo mais recente: ao recarregar a página continua este, não o antigo.
     escreverLugar(LUGAR_AUTO, s);
     avisoFlutuante(`Bem-vindo à <b>${esc(s.nome)}</b>! Segue as missões à esquerda: começa por colocar secretárias (tecla 4) e contratar no separador Contratar.`, 'info', ic('sparkles'));
+    abrirEditorPersonagem();
   },
   voltarAoJogo: () => {
     menus.mostrar(null);
@@ -2439,6 +2720,7 @@ function ciclo(agora: number): void {
   grelha.visible = !montra && ferramenta !== 'selecionar';
   cortarParedes(dt);
   ambiente.atualizar(dt, minutoDoDia(s) + acumulado, def.cicloDia);
+  atualizarBairro();
   confetes.atualizar(dt);
   emitirTrabalho(dt);
   particulas.atualizar(dt);

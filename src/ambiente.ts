@@ -21,6 +21,29 @@ const RUA_T_Z = -22; // rua transversal (ao longo de x)
 const MEIA_RUA = 2.1; // meia largura do asfalto
 const MEIA_RUA_PASSEIO = 3.4; // meia largura do asfalto + passeio
 
+export type EstadoCasa = 'tua' | 'arrendada' | 'morada';
+
+/** Material de placa com texto branco sobre a cor dada (dos dois lados). */
+function placaMaterial(texto: string, cor: string): THREE.MeshStandardMaterial {
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 144;
+  const g = c.getContext('2d')!;
+  g.fillStyle = '#ffffff';
+  g.fillRect(0, 0, 256, 144);
+  g.fillStyle = cor;
+  g.fillRect(8, 8, 240, 128);
+  g.fillStyle = '#ffffff';
+  g.font = 'bold 40px Inter, sans-serif';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText(texto, 128, 74);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.6, side: THREE.DoubleSide });
+}
+
 interface Retangulo {
   x0: number;
   x1: number;
@@ -166,12 +189,16 @@ export class Ambiente {
       this.ocupado.push({ x0: x - MEIA_RUA_PASSEIO - 0.4, x1: x + MEIA_RUA_PASSEIO + 0.4, z0: -grande, z1: grande, relva: false });
     this.ocupado.push({ x0: -grande, x1: grande, z0: RUA_T_Z - MEIA_RUA_PASSEIO - 0.4, z1: RUA_T_Z + MEIA_RUA_PASSEIO + 0.4, relva: false });
 
+    // Estacionamento entre o escritório e a rua do bairro
+    this.lote = { x0: largura + 3.5, x1: this.ruaBairro - MEIA_RUA_PASSEIO, z0: this.centro.z - 13.2, z1: this.centro.z + 5.8 };
+    this.ocupado.push({ ...this.lote, x0: this.lote.x0 - 0.5, z0: this.lote.z0 - 0.5, z1: this.lote.z1 + 0.5, relva: false });
     this.criarTerreno(largura, altura, entrada);
     this.criarEstrada(altura, entrada);
     this.criarArvores(altura);
     this.criarBairro();
     this.plantarArvoresSoltas(largura, altura);
     this.criarCidade();
+    this.criarEstacionamento();
     this.criarRelva();
   }
 
@@ -440,6 +467,134 @@ export class Ambiente {
 
   private readonly matLuzes: THREE.MeshStandardMaterial[] = [];
 
+  /** Casas do bairro, pela ordem dos ids do jogo (ver NUM_CASAS em sim.ts). */
+  private readonly casas: { malhas: THREE.Object3D[]; placa: THREE.Mesh; centro: THREE.Vector3 }[] = [];
+  private readonly matPlacas: Record<EstadoCasa, THREE.MeshStandardMaterial> = {
+    tua: placaMaterial('CASA TUA', '#2f9e5b'),
+    arrendada: placaMaterial('ARRENDADA', '#2f6fb8'),
+    morada: placaMaterial('MORAS AQUI', '#d9822b'),
+  };
+  private readonly lote: { x0: number; x1: number; z0: number; z1: number };
+  private readonly lugares: { x: number; z: number; rot: number }[] = [];
+  private readonly carrosLote: (THREE.Object3D | null)[] = [];
+  private assinaturaLote = '';
+
+  /** Casa do bairro debaixo do raio (ou null). */
+  casaEm(raio: THREE.Raycaster): number | null {
+    const hit = raio.intersectObjects(this.casas.flatMap((c) => c.malhas), false)[0];
+    return hit ? (hit.object.userData.casa as number) : null;
+  }
+
+  /** Centro de uma casa do bairro (para a câmara lá ir). */
+  centroCasa(id: number): THREE.Vector3 | null {
+    return this.casas[id]?.centro.clone() ?? null;
+  }
+
+  /** Placas à frente das casas que são tuas, arrendadas ou onde moras. */
+  marcarCasas(estados: Map<number, EstadoCasa>): void {
+    this.casas.forEach((c, id) => {
+      const e = estados.get(id);
+      c.placa.visible = !!e;
+      if (e) (c.placa.children[0] as THREE.Mesh).material = this.matPlacas[e];
+    });
+  }
+
+  /**
+   * Carros no estacionamento: os teus (cores) primeiro e depois os da equipa que está no escritório.
+   * Só reconstrói quando muda alguma coisa.
+   */
+  estacionamento(meus: number[], equipa: number): void {
+    const assinatura = `${meus.join(',')}|${Math.min(equipa, this.lugares.length)}`;
+    if (assinatura === this.assinaturaLote) return;
+    this.assinaturaLote = assinatura;
+    const CORES = [0x6b7280, 0x9b1b1b, 0xd8d8d8, 0x2b2d31, 0x0f4c3a, 0xb45309, 0xf2f2f2, 0x2f7fb8, 0xe0b23a, 0x1f3a6e];
+    this.lugares.forEach((l, k) => {
+      const cor = k < meus.length ? meus[k] : k < meus.length + equipa ? CORES[(k * 7) % CORES.length] : null;
+      const atual = this.carrosLote[k];
+      if (atual && (cor === null || atual.userData.cor !== cor)) {
+        this.cena.remove(atual);
+        this.carrosLote[k] = null;
+      }
+      if (cor !== null && !this.carrosLote[k]) {
+        const c = this.criarCarro(cor, 900 + k);
+        c.userData.cor = cor;
+        c.position.set(l.x, -0.1, l.z);
+        c.rotation.y = l.rot;
+        this.cena.add(c);
+        this.carrosLote[k] = c;
+      }
+    });
+  }
+
+  /** Parque de asfalto com uma fila de lugares de cada lado e uma saída para a rua do bairro. */
+  private criarEstacionamento(): void {
+    const { x0, x1, z0, z1 } = this.lote;
+    const cx = (x0 + x1) / 2;
+    const cz = (z0 + z1) / 2;
+    const asfalto = texturaNoMundo(materialPBR('asphalt_02', 1, { color: 0x7d7d7d, roughness: 1 }), 0.55, 0.25);
+    const pintura = mat(0xf2f2ee, { roughness: 0.7 });
+    const chao = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, z1 - z0).rotateX(-Math.PI / 2), asfalto);
+    chao.position.set(cx, -0.108, cz);
+    chao.receiveShadow = true;
+    this.cena.add(chao);
+    // Medidas do lugar a partir do carro
+    const amostra = new THREE.Box3().setFromObject(this.criarCarro(0xffffff, 0)).getSize(new THREE.Vector3());
+    const compCarro = Math.max(amostra.x, amostra.z);
+    const largCarro = Math.min(amostra.x, amostra.z);
+    const largLugar = largCarro + 0.55;
+    const fundo = compCarro + 0.6;
+    const saida = largLugar * 2.2; // largura da saída para a rua
+    // Saída: atravessa o passeio até ao asfalto da rua
+    const xr = this.ruaBairro - MEIA_RUA;
+    const rampa = new THREE.Mesh(new THREE.PlaneGeometry(xr - x1 + 0.05, saida).rotateX(-Math.PI / 2), asfalto);
+    rampa.position.set((x1 + xr) / 2, -0.012, cz);
+    rampa.receiveShadow = true;
+    this.cena.add(rampa);
+    // Lancil à volta (menos na saída)
+    const lancil = mat(0xbdb9b0, { roughness: 0.85 });
+    const borda = (bx: number, bz: number, lx: number, lz: number) => {
+      const b = new THREE.Mesh(new THREE.BoxGeometry(lx, 0.12, lz), lancil);
+      b.position.set(bx, -0.06, bz);
+      b.castShadow = b.receiveShadow = true;
+      this.cena.add(b);
+    };
+    borda(cx, z0, x1 - x0 + 0.12, 0.12);
+    borda(cx, z1, x1 - x0 + 0.12, 0.12);
+    borda(x0, cz, 0.12, z1 - z0);
+    const meioSaida = saida / 2;
+    borda(x1, (z0 + cz - meioSaida) / 2, 0.12, cz - meioSaida - z0);
+    borda(x1, (z1 + cz + meioSaida) / 2, 0.12, z1 - cz - meioSaida);
+    // Lugares: uma fila junto ao lado do escritório e outra junto à rua (menos em frente à saída)
+    const tiras: THREE.Matrix4[] = [];
+    const mtx = new THREE.Matrix4();
+    const rot = new THREE.Matrix4().makeRotationY(Math.PI / 2);
+    const n = Math.floor((z1 - z0 - 0.4) / largLugar);
+    const zi = cz - (n * largLugar) / 2;
+    for (const lado of [-1, 1]) {
+      const xf = lado < 0 ? x0 : x1; // fundo do lugar (junto ao lancil)
+      const xc = xf - lado * (fundo / 2);
+      for (let k = 0; k <= n; k++) {
+        const zl = zi + k * largLugar;
+        if (lado > 0 && Math.abs(zl - cz) < meioSaida) continue;
+        mtx.copy(rot).setPosition(xc, -0.1, zl);
+        tiras.push(mtx.clone());
+      }
+      for (let k = 0; k < n; k++) {
+        const zl = zi + (k + 0.5) * largLugar;
+        if (lado > 0 && Math.abs(zl - cz) < meioSaida + largLugar / 2) continue;
+        this.lugares.push({ x: xc - lado * 0.1, z: zl, rot: lado < 0 ? Math.PI / 2 : -Math.PI / 2 });
+      }
+    }
+    const im = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.07, fundo).rotateX(-Math.PI / 2), pintura, tiras.length);
+    tiras.forEach((m, k) => im.setMatrixAt(k, m));
+    im.receiveShadow = true;
+    this.cena.add(im);
+    // Os lugares mais perto da saída primeiro
+    this.lugares.sort((a, b) => Math.abs(a.z - cz) + (x1 - a.x) * 0.05 - (Math.abs(b.z - cz) + (x1 - b.x) * 0.05));
+    this.carrosLote.length = this.lugares.length;
+    this.carrosLote.fill(null);
+  }
+
   /** Carro de passeio (em metros: 4,4 × 1,8 × 1,45), com pintura com verniz, vidros escuros e faróis. */
   private criarCarro(cor: number, i: number): THREE.Object3D {
     // Modelo real (Khronos CarConcept), com a pintura de cada carro na sua cor
@@ -584,6 +739,7 @@ export class Ambiente {
       for (let z = this.centro.z - 75; z < this.centro.z + 80; z += 9.5) {
         i++;
         if (Math.abs(z - RUA_T_Z) < 9) continue;
+        if (lado < 0 && z > this.lote.z0 - 1 && z < this.lote.z1 + 1) continue; // estacionamento
         const s = i * 11 + (lado > 0 ? 500 : 0);
         const w = 4.6 + hash(s + 1) * 1.8; // ao longo de z
         const d = 4.4 + hash(s + 2) * 1.6; // ao longo de x
@@ -597,6 +753,8 @@ export class Ambiente {
         corpo.position.set(xc, y0 + h / 2, z);
         corpo.castShadow = corpo.receiveShadow = true;
         this.cena.add(corpo);
+        const idCasa = this.casas.length;
+        corpo.userData.casa = idCasa;
         // Soco de tijolo à volta da base
         const soco = new THREE.Mesh(uvEmMetros(new THREE.BoxGeometry(d + 0.06, 0.35, w + 0.06), d, 0.35, w, 3), tijolo);
         soco.position.set(xc, y0 + 0.175, z);
@@ -613,6 +771,22 @@ export class Ambiente {
         telhado.position.set(xc, y0 + h - 0.02, z);
         telhado.castShadow = telhado.receiveShadow = true;
         this.cena.add(telhado);
+        telhado.userData.casa = idCasa;
+        {
+          // Placa no jardim da frente (só aparece nas casas que são tuas)
+          const placa = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.85, 0.05), branco);
+          const px = xb + lado * (MEIA_RUA_PASSEIO + 0.75);
+          placa.position.set(px, y0 + 0.42, z - w * 0.42);
+          placa.castShadow = true;
+          const tabua = new THREE.Mesh(new THREE.PlaneGeometry(0.75, 0.42), this.matPlacas.tua);
+          tabua.position.set(0, 0.32, 0);
+          tabua.rotation.y = -lado * Math.PI / 2;
+          tabua.castShadow = true;
+          placa.add(tabua);
+          placa.visible = false;
+          this.cena.add(placa);
+          this.casas.push({ malhas: [corpo, telhado], placa, centro: new THREE.Vector3(xc, 0, z) });
+        }
         // Beirados: tábuas de telha um pouco mais compridas que a casa, por cima das águas
         const comp = Math.hypot(d / 2 + 0.3, rh);
         const incl = Math.atan2(rh, d / 2 + 0.3);

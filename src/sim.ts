@@ -314,6 +314,17 @@ export interface Funcionario {
   baixaAte?: number; // de baixa (fica em casa) até este minuto de jogo
   tracos?: IdTraco[]; // personalidade (saves antigos: nenhum)
   formacao?: { area: Area; ate: number }; // num curso (fica fora do escritório) até este minuto
+  dono?: boolean; // o teu personagem: não recebe salário e não pode ser despedido
+  aparencia?: Aparencia; // aspeto escolhido no editor (só o dono)
+}
+
+/** Aspeto do teu personagem: modelo (rosto e corpo), cores do cabelo e da roupa, e tom de pele. */
+export interface Aparencia {
+  sexo: 'm' | 'f';
+  modelo: number; // índice entre os modelos desse sexo
+  cabelo: number; // cor (0xRRGGBB)
+  roupa: number; // cor (0xRRGGBB)
+  pele: number; // −1 (mais escura) a 1 (mais clara)
 }
 
 export interface Candidato {
@@ -444,6 +455,7 @@ export const DIFICULDADES: Record<Dificuldade, { nome: string; dinheiro: number;
 };
 
 export interface OpcoesJogo {
+  fundador?: { nome: string; aparencia: Aparencia }; // o teu personagem, que também trabalha
   nome?: string;
   dificuldade?: Dificuldade;
   eventos?: boolean; // eventos aleatórios no fecho do mês
@@ -514,6 +526,10 @@ export interface Estado {
   desafio?: { id: IdDesafio; resultado: 'curso' | 'ganho' | 'perdido'; mesFim?: number };
   semFalencia?: boolean;
   feiras?: Record<string, number>; // id da feira → último ano em que se foi
+  imoveis?: Imovel[]; // casas do bairro que são tuas
+  casaAlugada?: number; // casa do bairro onde moras de renda
+  morada?: number; // casa onde moras (tua ou alugada)
+  carros?: Carro[]; // carros teus, no estacionamento do escritório
 }
 
 // ---------------------------------------------------------------------------
@@ -601,6 +617,7 @@ export function novoJogo(semente = 12345, largura = 24, altura = 18, opcoes: Opc
   completarMissoes(s);
   mensagem(s, `Bem-vindo à ${nome}! Coloca secretárias e contrata a tua equipa.`);
   if (s.desafio) mensagem(s, `🎯 Desafio: ${DESAFIOS[s.desafio.id].descricao}`, 'evento');
+  if (opcoes.fundador) criarFundador(s, opcoes.fundador.nome, opcoes.fundador.aparencia);
   return s;
 }
 
@@ -620,8 +637,8 @@ function novoCandidato(s: Estado): Candidato {
   const especialidade = escolher(s, AREAS);
   const competencias = {} as Competencias;
   for (const a of AREAS) {
-    const v = a === especialidade ? 0.45 + aleatorio(s) * 0.5 : 0.2 + aleatorio(s) * 0.3;
-    competencias[a] = Math.round(v * 100) / 100;
+    const v = (a === especialidade ? 0.45 + aleatorio(s) * 0.5 : 0.2 + aleatorio(s) * 0.3) + 0.08 * prestigio(s);
+    competencias[a] = Math.round(Math.min(1, v) * 100) / 100;
   }
   const salario = Math.round(
     (ECON.salarioBase + competenciaMedia(competencias) * ECON.salarioPorCompetencia) / 50) * 50;
@@ -1018,6 +1035,7 @@ export function contratar(s: Estado, indice: number): Resultado {
 export function despedir(s: Estado, id: number): Resultado {
   const f = s.funcionarios.find((o) => o.id === id);
   if (!f) return { ok: false };
+  if (f.dono) return { ok: false, msg: 'Não te podes despedir a ti próprio.' };
   s.funcionarios = s.funcionarios.filter((o) => o !== f);
   mensagem(s, `${f.nome} foi despedido(a).`);
   atribuirSecretarias(s);
@@ -1707,6 +1725,8 @@ function erroNoEstado(e: unknown): string | null {
     if (!Array.isArray(f.caminho) || !f.caminho.every((c) => celulaValida(c, L, A))) return 'caminho';
     if (f.baixaAte !== undefined && !numero(f.baixaAte)) return 'baixa do funcionário';
     if (!tracosValidos(f.tracos)) return 'personalidade do funcionário';
+    if (f.dono !== undefined && typeof f.dono !== 'boolean') return 'dono';
+    if (f.aparencia !== undefined && !aparenciaValida(f.aparencia)) return 'aparência do personagem';
     if (f.formacao !== undefined && !(objeto(f.formacao) && AREAS.includes(f.formacao.area as Area) && numero(f.formacao.ate)))
       return 'formação do funcionário';
   }
@@ -1916,8 +1936,9 @@ function fimDoMes(s: Estado): void {
   }
   mudarDeEra(s);
   const salarios = s.funcionarios.reduce((t, f) => t + f.salario, 0);
-  const despesas = salarios + rendaDe(s) + custosPlataforma;
+  const despesas = salarios + rendaDe(s) + custosPlataforma + custosPatrimonio(s);
   if (s.subsidiarias?.length) receberDasSubsidiarias(s);
+  s.extraMes += rendasRecebidas(s);
   const extra = s.extraMes;
   s.extraMes = 0;
   // Os investidores ficam com a sua parte do lucro do mês.
@@ -2079,6 +2100,12 @@ export const CONQUISTAS: Conquista[] = [
     cumprida: (s) => s.funcionarios.length >= 10 },
   { id: 'salas3', icone: '📐', nome: 'Arquiteto', descricao: 'Constrói 3 salas fechadas.',
     cumprida: (s) => detetarSalas(s).total >= 3 },
+  { id: 'proprietario', icone: '🏡', nome: 'Casa própria', descricao: 'Compra uma casa no bairro.',
+    cumprida: (s) => (s.imoveis?.length ?? 0) >= 1 },
+  { id: 'senhorio', icone: '🔑', nome: 'Senhorio', descricao: 'Tem 3 casas arrendadas ao mesmo tempo.',
+    cumprida: (s) => (s.imoveis ?? []).filter((i) => i.arrendada).length >= 3 },
+  { id: 'garagem', icone: '🏎️', nome: 'Colecionador', descricao: 'Tem 3 carros no estacionamento.',
+    cumprida: (s) => (s.carros?.length ?? 0) >= 3 },
   { id: 'decorador', icone: '🪴', nome: 'Decorador', descricao: 'Coloca 5 objetos de decoração.',
     cumprida: (s) => s.objetos.length >= 5 },
   { id: 'feliz', icone: '😄', nome: 'Bom ambiente', descricao: 'Tem pelo menos 3 funcionários, todos com felicidade 85 ou mais.',
@@ -2466,7 +2493,7 @@ export function avaliarEmpresa(s: Estado): Avaliacao {
   const marca = (nivelDaEmpresa(s) - 1) * AVALIACAO.porNivel + s.conquistas.length * AVALIACAO.porConquista
     + sucessos * AVALIACAO.porSucesso;
   const ativos = AVALIACAO.ativos * (s.secretarias.length * ECON.custoSecretaria
-    + s.objetos.reduce((t, o) => t + OBJETOS[o.tipo].custo, 0)) + valorDasSubsidiarias(s);
+    + s.objetos.reduce((t, o) => t + OBJETOS[o.tipo].custo, 0)) + valorDasSubsidiarias(s) + valorPatrimonio(s);
   const r = (v: number) => Math.round(v / 100) * 100;
   const a = { caixa: r(s.dinheiro), produtos: r(produtos), projetos: r(projetos), equipa: r(equipa), marca: r(marca), ativos: r(ativos) };
   return { ...a, total: Math.max(0, a.caixa + a.produtos + a.projetos + a.equipa + a.marca + a.ativos) };
@@ -3532,7 +3559,7 @@ function erroNosExtras(e: Obj): string | null {
     && ['curso', 'ganho', 'perdido'].includes(e.desafio.resultado as string)
     && (e.desafio.mesFim === undefined || inteiro(e.desafio.mesFim)))) return 'desafio';
   if (e.semFalencia !== undefined && typeof e.semFalencia !== 'boolean') return 'semFalencia';
-  return null;
+  return erroNoPatrimonio(e);
 }
 
 // ---------------------------------------------------------------------------
@@ -3889,4 +3916,302 @@ function erroNaPlataforma(p: Record<string, unknown>): string | null {
   if (!inteiro(p.servidor) || !SERVIDORES[p.servidor as number]) return 'servidor do produto';
   if (!numero(p.satisfacao)) return 'satisfação do produto';
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Património: casas do bairro e carros
+// ---------------------------------------------------------------------------
+
+/** Casas do bairro, numeradas pela ordem do mapa: primeiro as do lado do escritório, depois as do outro lado. */
+export const NUM_CASAS = 28;
+const CASAS_LADO_ESCRITORIO = 13;
+export const PATRIMONIO = {
+  valorizacaoAno: 0.04, // as casas valem mais 4% por ano
+  encargosMes: 0.0006, // IMI, seguro e obras: fração do valor por mês
+  comissaoVenda: 0.05, // a imobiliária fica com 5% quando vendes
+  desvalorizacaoCarro: 0.85, // o carro vale 85% do ano anterior
+  carroNovo: 0.85, // e perde 15% mal sai do stand
+  manutencaoCarro: 0.004, // seguro, combustível e revisões: fração do preço por mês
+  lugares: 8, // lugares do estacionamento para os teus carros
+  prestigioMax: 400000, // casa onde moras + carros que valem isto = prestígio máximo
+};
+
+export interface DefCasa {
+  id: number;
+  morada: string;
+  tipologia: string;
+  area: number; // m²
+  preco: number; // preço no ano 1
+  renda: number; // renda mensal no ano 1
+}
+
+export interface Imovel {
+  id: number; // índice da casa (0 a NUM_CASAS - 1)
+  compradaPor: number;
+  arrendada?: boolean; // arrendada a inquilinos (dá renda todos os meses)
+}
+
+export type IdCarro = 'citadino' | 'familiar' | 'eletrico' | 'desportivo' | 'luxo';
+export interface DefCarro {
+  nome: string;
+  descricao: string;
+  preco: number;
+  cor: number;
+}
+export const CARROS: Record<IdCarro, DefCarro> = {
+  citadino: { nome: 'Citadino', descricao: 'Pequeno e barato. Estaciona-se em qualquer lado.', preco: 14000, cor: 0xd8d8d8 },
+  familiar: { nome: 'Familiar', descricao: 'Espaço para a família e para a equipa.', preco: 28000, cor: 0x1f3a6e },
+  eletrico: { nome: 'Elétrico', descricao: 'Silencioso e moderno. Fica bem à porta de uma tecnológica.', preco: 45000, cor: 0x2f8f6a },
+  desportivo: { nome: 'Desportivo', descricao: 'Rápido e vistoso. Toda a gente repara.', preco: 95000, cor: 0xc0161d },
+  luxo: { nome: 'Topo de gama', descricao: 'Para quem já chegou lá.', preco: 160000, cor: 0x17181c },
+};
+export const LISTA_CARROS = Object.keys(CARROS) as IdCarro[];
+
+export interface Carro {
+  id: number;
+  modelo: IdCarro;
+  compradoEm: number; // minuto do jogo
+}
+
+const anosDeJogo = (minutos: number) => Math.max(0, minutos) / (MIN_POR_DIA * DIAS_POR_MES * 12);
+
+export function defCasa(id: number): DefCasa {
+  const h = (k: number) => hashTexto(`casa ${id} ${k}`);
+  const quartos = 1 + Math.floor(h(1) * 4); // T1 a T4
+  const area = Math.round(55 + quartos * 28 + h(2) * 40);
+  const preco = Math.round((area * (1900 + h(3) * 700)) / 1000) * 1000;
+  // Casas ímpares de um lado da rua, pares do outro.
+  const numero = id < CASAS_LADO_ESCRITORIO ? 1 + id * 2 : 2 + (id - CASAS_LADO_ESCRITORIO) * 2;
+  return {
+    id, morada: `Rua das Acácias, ${numero}`, tipologia: `T${quartos}`, area, preco,
+    renda: Math.round((preco * (0.0042 + h(4) * 0.0012)) / 10) * 10,
+  };
+}
+
+/** Valor de mercado da casa agora (as casas valorizam com o tempo). */
+export function valorCasa(s: Estado, id: number): number {
+  return Math.round((defCasa(id).preco * (1 + PATRIMONIO.valorizacaoAno) ** anosDeJogo(s.minuto)) / 100) * 100;
+}
+
+/** Renda mensal da casa agora (acompanha o valor). */
+export function rendaCasa(s: Estado, id: number): number {
+  return Math.round((defCasa(id).renda * (1 + PATRIMONIO.valorizacaoAno) ** anosDeJogo(s.minuto)) / 10) * 10;
+}
+
+export function imovelDe(s: Estado, id: number): Imovel | undefined {
+  return s.imoveis?.find((i) => i.id === id);
+}
+
+export function valorCarro(s: Estado, c: Carro): number {
+  const anos = anosDeJogo(s.minuto - c.compradoEm);
+  return Math.round((CARROS[c.modelo].preco * PATRIMONIO.carroNovo * PATRIMONIO.desvalorizacaoCarro ** anos) / 100) * 100;
+}
+
+/** Quanto valem as tuas casas e carros. */
+export function valorPatrimonio(s: Estado): number {
+  return (s.imoveis ?? []).reduce((t, i) => t + valorCasa(s, i.id), 0)
+    + (s.carros ?? []).reduce((t, c) => t + valorCarro(s, c), 0);
+}
+
+/** 0-1: a casa onde moras e os carros que tens. Atrai candidatos melhores. */
+export function prestigio(s: Estado): number {
+  const casa = s.morada === undefined ? 0 : valorCasa(s, s.morada);
+  const carros = (s.carros ?? []).reduce((t, c) => t + CARROS[c.modelo].preco, 0);
+  return Math.min(1, (casa + carros) / PATRIMONIO.prestigioMax);
+}
+
+/** Rendas que os inquilinos te pagam por mês. */
+export function rendasRecebidas(s: Estado): number {
+  return (s.imoveis ?? []).filter((i) => i.arrendada).reduce((t, i) => t + rendaCasa(s, i.id), 0);
+}
+
+/** Despesas do mês com casas e carros: a renda da casa alugada, os encargos das tuas e a manutenção dos carros. */
+export function custosPatrimonio(s: Estado): number {
+  const aluguer = s.casaAlugada === undefined ? 0 : rendaCasa(s, s.casaAlugada);
+  const encargos = (s.imoveis ?? []).reduce((t, i) => t + valorCasa(s, i.id) * PATRIMONIO.encargosMes, 0);
+  const carros = (s.carros ?? []).reduce((t, c) => t + CARROS[c.modelo].preco * PATRIMONIO.manutencaoCarro, 0);
+  return Math.round(aluguer + encargos + carros);
+}
+
+const casaValida = (id: number) => Number.isInteger(id) && id >= 0 && id < NUM_CASAS;
+
+export function comprarCasa(s: Estado, id: number): Resultado {
+  if (!casaValida(id)) return { ok: false, msg: 'Casa desconhecida.' };
+  if (imovelDe(s, id)) return { ok: false, msg: 'Esta casa já é tua.' };
+  const preco = valorCasa(s, id);
+  if (s.dinheiro < preco) return { ok: false, msg: `Precisas de ${euros(preco)}.` };
+  s.dinheiro -= preco;
+  (s.imoveis ??= []).push({ id, compradaPor: preco });
+  const d = defCasa(id);
+  // Se morava lá de renda, passa a morar na casa que é sua; se não morava em lado nenhum, muda-se.
+  if (s.casaAlugada === id) delete s.casaAlugada;
+  if (s.morada === undefined) s.morada = id;
+  mensagem(s, `🏡 Compraste a casa da ${d.morada} (${d.tipologia}) por ${euros(preco)}.`, 'conquista');
+  verificarConquistas(s);
+  return { ok: true };
+}
+
+export function venderCasa(s: Estado, id: number): Resultado {
+  const i = imovelDe(s, id);
+  if (!i) return { ok: false, msg: 'Esta casa não é tua.' };
+  const recebe = Math.round(valorCasa(s, id) * (1 - PATRIMONIO.comissaoVenda));
+  s.dinheiro += recebe;
+  s.imoveis = s.imoveis!.filter((o) => o.id !== id);
+  if (s.morada === id) delete s.morada;
+  const lucro = recebe - i.compradaPor;
+  mensagem(s, `🏷️ Vendeste a casa da ${defCasa(id).morada} por ${euros(recebe)} (${lucro >= 0 ? 'ganhaste' : 'perdeste'} ${euros(Math.abs(lucro))}).`);
+  return { ok: true };
+}
+
+/** Arrenda (ou deixa de arrendar) uma casa tua a inquilinos. */
+export function arrendarCasa(s: Estado, id: number, arrendar: boolean): Resultado {
+  const i = imovelDe(s, id);
+  if (!i) return { ok: false, msg: 'Esta casa não é tua.' };
+  if (arrendar && s.morada === id) return { ok: false, msg: 'Moras nesta casa. Muda-te primeiro.' };
+  if (arrendar) i.arrendada = true;
+  else delete i.arrendada;
+  if (arrendar) {
+    mensagem(s, `🔑 A casa da ${defCasa(id).morada} foi arrendada por ${euros(rendaCasa(s, id))}/mês.`);
+    verificarConquistas(s);
+  }
+  return { ok: true };
+}
+
+/** Aluga uma casa do bairro para morar. Paga já o primeiro mês; os outros no fecho de cada mês. */
+export function alugarCasa(s: Estado, id: number): Resultado {
+  if (!casaValida(id)) return { ok: false, msg: 'Casa desconhecida.' };
+  if (imovelDe(s, id)) return { ok: false, msg: 'Esta casa já é tua: podes morar nela.' };
+  if (s.casaAlugada === id) return { ok: false, msg: 'Já moras nesta casa.' };
+  const renda = rendaCasa(s, id);
+  if (s.dinheiro < renda) return { ok: false, msg: 'Dinheiro insuficiente.' };
+  s.dinheiro -= renda;
+  s.casaAlugada = id;
+  s.morada = id;
+  mensagem(s, `🏠 Mudaste-te para a ${defCasa(id).morada}, de renda (${euros(renda)}/mês).`);
+  return { ok: true };
+}
+
+/** Passa a morar numa casa tua (deixa a casa alugada, se havia). */
+export function morarEm(s: Estado, id: number): Resultado {
+  const i = imovelDe(s, id);
+  if (!i) return { ok: false, msg: 'Esta casa não é tua.' };
+  if (i.arrendada) return { ok: false, msg: 'Está arrendada: acaba primeiro o arrendamento.' };
+  delete s.casaAlugada;
+  s.morada = id;
+  mensagem(s, `🏡 Mudaste-te para a tua casa da ${defCasa(id).morada}.`);
+  return { ok: true };
+}
+
+export function deixarAluguer(s: Estado): Resultado {
+  if (s.casaAlugada === undefined) return { ok: false, msg: 'Não tens casa alugada.' };
+  if (s.morada === s.casaAlugada) delete s.morada;
+  delete s.casaAlugada;
+  return { ok: true };
+}
+
+export function comprarCarro(s: Estado, modelo: IdCarro): Resultado {
+  const d = CARROS[modelo];
+  if (!d) return { ok: false, msg: 'Carro desconhecido.' };
+  if ((s.carros?.length ?? 0) >= PATRIMONIO.lugares) return { ok: false, msg: 'O estacionamento está cheio. Vende um carro primeiro.' };
+  if (s.dinheiro < d.preco) return { ok: false, msg: `Precisas de ${euros(d.preco)}.` };
+  s.dinheiro -= d.preco;
+  (s.carros ??= []).push({ id: s.proximoId++, modelo, compradoEm: s.minuto });
+  mensagem(s, `🚗 Compraste um carro ${d.nome.toLowerCase()} por ${euros(d.preco)}. Está no estacionamento.`);
+  verificarConquistas(s);
+  return { ok: true };
+}
+
+export function venderCarro(s: Estado, id: number): Resultado {
+  const c = s.carros?.find((o) => o.id === id);
+  if (!c) return { ok: false, msg: 'Carro desconhecido.' };
+  const v = valorCarro(s, c);
+  s.dinheiro += v;
+  s.carros = s.carros!.filter((o) => o !== c);
+  mensagem(s, `🚗 Vendeste o carro ${CARROS[c.modelo].nome.toLowerCase()} por ${euros(v)}.`);
+  return { ok: true };
+}
+
+function erroNoPatrimonio(e: Record<string, unknown>): string | null {
+  const id = (v: unknown) => Number.isInteger(v) && (v as number) >= 0 && (v as number) < NUM_CASAS;
+  if (e.imoveis !== undefined) {
+    if (!Array.isArray(e.imoveis)) return 'imóveis';
+    const vistas = new Set<number>();
+    for (const i of e.imoveis as unknown[]) {
+      if (!i || typeof i !== 'object') return 'imóvel';
+      const o = i as Record<string, unknown>;
+      if (!id(o.id) || vistas.has(o.id as number)) return 'imóvel';
+      vistas.add(o.id as number);
+      if (typeof o.compradaPor !== 'number' || !Number.isFinite(o.compradaPor)) return 'preço do imóvel';
+      if (o.arrendada !== undefined && typeof o.arrendada !== 'boolean') return 'arrendamento';
+    }
+  }
+  if (e.casaAlugada !== undefined && !id(e.casaAlugada)) return 'casa alugada';
+  if (e.morada !== undefined && !id(e.morada)) return 'morada';
+  if (e.carros !== undefined) {
+    if (!Array.isArray(e.carros)) return 'carros';
+    const vistos = new Set<number>();
+    for (const c of e.carros as unknown[]) {
+      if (!c || typeof c !== 'object') return 'carro';
+      const o = c as Record<string, unknown>;
+      if (!Number.isInteger(o.id) || vistos.has(o.id as number)) return 'carro';
+      vistos.add(o.id as number);
+      if (typeof o.modelo !== 'string' || !(o.modelo in CARROS) || typeof o.compradoEm !== 'number') return 'carro';
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// O teu personagem: um funcionário especial que trabalha contigo desde o primeiro dia
+// ---------------------------------------------------------------------------
+
+export const APARENCIA_INICIAL: Aparencia = { sexo: 'm', modelo: 0, cabelo: 0x3b2a1e, roupa: 0x2f6fb8, pele: 0 };
+
+export function fundadorDe(s: Estado): Funcionario | undefined {
+  return s.funcionarios.find((f) => f.dono);
+}
+
+function aparenciaValida(a: unknown): boolean {
+  if (!objeto(a)) return false;
+  const cor = (v: unknown) => inteiro(v) && v >= 0 && v <= 0xffffff;
+  return (a.sexo === 'm' || a.sexo === 'f') && inteiro(a.modelo) && a.modelo >= 0 && cor(a.cabelo) && cor(a.roupa)
+    && numero(a.pele) && a.pele >= -1 && a.pele <= 1;
+}
+
+/**
+ * Cria o teu personagem (ou muda-lhe o nome e o aspeto, se já existe). Não recebe salário, não pode
+ * ser despedido e trabalha nos projetos como os outros: dá para começar sozinho.
+ */
+export function criarFundador(s: Estado, nome: string, aparencia: Aparencia): Resultado {
+  if (!aparenciaValida(aparencia)) return { ok: false, msg: 'Aspeto inválido.' };
+  const limpo = nome.trim().slice(0, 24) || 'Fundador';
+  const atual = fundadorDe(s);
+  if (atual) {
+    atual.nome = limpo;
+    atual.aparencia = { ...aparencia };
+    return { ok: true };
+  }
+  const f: Funcionario = {
+    id: s.proximoId++,
+    nome: limpo,
+    competencias: { programacao: 0.55, design: 0.5, testes: 0.45 },
+    projetoId: null,
+    salario: 0,
+    felicidade: 85,
+    secretariaId: null,
+    estado: 'emCasa',
+    dentro: false,
+    x: s.entrada.x,
+    z: s.entrada.z,
+    caminho: [],
+    versaoCaminho: -1,
+    horaChegada: HORA_CHEGADA * 60,
+    tracos: ['ambicioso'],
+    dono: true,
+    aparencia: { ...aparencia },
+  };
+  s.funcionarios.unshift(f);
+  atribuirSecretarias(s);
+  mensagem(s, `👋 ${limpo} fundou a ${s.nome}. Coloca uma secretária para começares a trabalhar.`);
+  return { ok: true };
 }

@@ -6,7 +6,7 @@ const VERSAO_LUCIDE = '1.75.0';
 const ICONES = [
   'wallet', 'trending-up', 'trending-down', 'users', 'smile', 'meh', 'frown', 'laugh', 'flame', 'sun', 'moon',
   'pause', 'play', 'fast-forward', 'chevrons-right', 'save', 'menu', 'folder-kanban', 'user-plus', 'package',
-  'chart-column', 'building-2', 'mouse-pointer-2', 'move', 'rotate-cw', 'brick-wall', 'door-open', 'monitor', 'sprout', 'hammer', 'x',
+  'chart-column', 'building-2', 'mouse-pointer-2', 'move', 'rotate-cw', 'car', 'key-round', 'user-round', 'palette', 'shirt', 'brick-wall', 'door-open', 'monitor', 'sprout', 'hammer', 'x',
   'chevron-right', 'chevron-left', 'chevron-down', 'newspaper', 'target', 'rocket', 'briefcase', 'megaphone',
   'handshake', 'lock', 'check', 'clock', 'star', 'calculator', 'file-text', 'shield', 'gamepad-2', 'sofa', 'coffee',
   'leaf', 'minus', 'plus', 'trophy', 'landmark', 'sparkles', 'circle-dollar-sign', 'info', 'triangle-alert', 'crown',
