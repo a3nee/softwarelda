@@ -962,7 +962,7 @@ function atualizarBairro(): void {
   for (const i of s.imoveis ?? []) estadosCasas.set(i.id, i.arrendada ? 'arrendada' : 'tua');
   if (s.morada !== undefined) estadosCasas.set(s.morada, 'morada');
   ambiente.marcarCasas(estadosCasas);
-  ambiente.estacionamento((s.carros ?? []).map((c) => CARROS[c.modelo].cor), s.funcionarios.filter((f) => f.dentro).length);
+  ambiente.estacionamento((s.carros ?? []).map((c) => CARROS[c.modelo].cor), s.funcionarios.filter((f) => f.dentro && !f.dono).length);
 }
 
 const passeio = new Passeio(cena, camara, () => ambiente.obstaculos);

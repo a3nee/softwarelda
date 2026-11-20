@@ -16,6 +16,11 @@ export const MIN_POR_MES = MIN_POR_DIA * DIAS_POR_MES;
 export const HORA_CHEGADA = 8; // começam a chegar
 export const HORA_INICIO = 9; // trabalho conta a partir daqui
 export const HORA_FIM = 17; // vão para casa
+/** Pausa de almoço: cada um sai entre as 12h30 e as 12h55 e volta uma hora depois. */
+export const ALMOCO = { saida: 12 * 60 + 30, duracao: 60, espalhar: 25, compensa: 1.15 };
+function minutoAlmoco(f: Funcionario): number {
+  return ALMOCO.saida + Math.floor(hashTexto(`almoco ${f.id}`) * ALMOCO.espalhar);
+}
 
 export const MESES = [
   'janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
@@ -314,6 +319,7 @@ export interface Funcionario {
   baixaAte?: number; // de baixa (fica em casa) até este minuto de jogo
   tracos?: IdTraco[]; // personalidade (saves antigos: nenhum)
   formacao?: { area: Area; ate: number }; // num curso (fica fora do escritório) até este minuto
+  almoco?: boolean; // saiu para almoçar (volta depois)
   dono?: boolean; // o teu personagem: não recebe salário e não pode ser despedido
   aparencia?: Aparencia; // aspeto escolhido no editor (só o dono)
 }
@@ -1246,7 +1252,8 @@ export function totalDaArea(p: Pick<Projeto, 'tipo' | 'trabalhoTotal' | 'manuten
 
 /** Pontos por minuto de um trabalhador numa área. */
 export function rendimento(f: Trabalhador, a: Area): number {
-  return f.competencias[a] * (0.5 + f.felicidade / 200) * RITMO_TRABALHO;
+  // ALMOCO.compensa: a hora de almoço não tira trabalho (rende-se mais no resto do dia).
+  return f.competencias[a] * (0.5 + f.felicidade / 200) * RITMO_TRABALHO * ALMOCO.compensa;
 }
 
 /** Cada um trabalha na área por acabar em que é mais competente (null se já está tudo feito). */
@@ -1727,6 +1734,7 @@ function erroNoEstado(e: unknown): string | null {
     if (f.baixaAte !== undefined && !numero(f.baixaAte)) return 'baixa do funcionário';
     if (!tracosValidos(f.tracos)) return 'personalidade do funcionário';
     if (f.dono !== undefined && typeof f.dono !== 'boolean') return 'dono';
+    if (f.almoco !== undefined && typeof f.almoco !== 'boolean') return 'almoço';
     if (f.aparencia !== undefined && !aparenciaValida(f.aparencia)) return 'aparência do personagem';
     if (f.formacao !== undefined && !(objeto(f.formacao) && AREAS.includes(f.formacao.area as Area) && numero(f.formacao.ate)))
       return 'formação do funcionário';
@@ -1828,9 +1836,18 @@ function minutoSeguinte(s: Estado): void {
   for (const f of s.funcionarios) {
     if (!f.dentro) {
       if (md === f.horaChegada && f.secretariaId !== null && !ausente(s, f)) planearChegada(s, f);
+      else if (f.almoco && md === minutoAlmoco(f) + ALMOCO.duracao) {
+        delete f.almoco;
+        f.felicidade = Math.min(100, f.felicidade + 1);
+        planearChegada(s, f);
+      }
       continue;
     }
     if (md === HORA_FIM * 60 && f.estado !== 'aSair' && f.estado !== 'preso') planearSaida(s, f);
+    else if (md === minutoAlmoco(f) && !f.dono && f.estado === 'aTrabalhar') {
+      f.almoco = true;
+      planearSaida(s, f);
+    }
 
     // O mapa mudou: quem está a andar (ou à espera de caminho) volta a planear.
     const espera = f.estado === 'semAcesso' || f.estado === 'preso';
@@ -1878,6 +1895,7 @@ function minutoSeguinte(s: Estado): void {
 function fimDoDia(s: Estado): void {
   const salas = s.objetos.length ? detetarSalas(s) : undefined;
   for (const f of s.funcionarios) {
+    delete f.almoco;
     // Quem ficou preso acaba por ir para casa (e não fica contente).
     if (f.dentro) {
       if (f.estado === 'preso') f.felicidade = Math.max(0, f.felicidade - 10);

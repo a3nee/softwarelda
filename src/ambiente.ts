@@ -492,6 +492,8 @@ export class Ambiente {
 
   /** Volta a pôr os carros nos lugares (depois de os conduzires). */
   reporEstacionamento(): void {
+    for (const m of this.manobras) this.cena.remove(m.obj);
+    this.manobras.length = 0;
     this.carrosLote.forEach((c) => c && this.cena.remove(c));
     this.carrosLote.fill(null);
     this.assinaturaLote = '';
@@ -522,25 +524,65 @@ export class Ambiente {
    * Carros no estacionamento: os teus (cores) primeiro e depois os da equipa que está no escritório.
    * Só reconstrói quando muda alguma coisa.
    */
+  /** Carros da equipa a entrar ou a sair do estacionamento (curva da rua até ao lugar). */
+  private readonly manobras: { obj: THREE.Object3D; a: THREE.Vector3; b: THREE.Vector3; c: THREE.Vector3; t: number; dur: number; sair: boolean }[] = [];
+
+  private manobra(obj: THREE.Object3D, l: { x: number; z: number }, sair: boolean): void {
+    const cz = (this.lote.z0 + this.lote.z1) / 2;
+    const cx = (this.lote.x0 + this.lote.x1) / 2;
+    const a = new THREE.Vector3(this.ruaBairro - 1, -0.1, cz + (sair ? -1 : 1) * 0.9); // na rua
+    const b = new THREE.Vector3(cx, -0.1, l.z); // corredor
+    const c = new THREE.Vector3(l.x, -0.1, l.z); // lugar
+    const dur = (a.distanceTo(b) + b.distanceTo(c)) / 5;
+    this.manobras.push({ obj, a, b, c, t: 0, dur, sair });
+  }
+
+  private avancarManobras(dt: number): void {
+    const p = new THREE.Vector3();
+    const d = new THREE.Vector3();
+    for (let i = this.manobras.length - 1; i >= 0; i--) {
+      const m = this.manobras[i];
+      m.t = Math.min(1, m.t + dt / m.dur);
+      const e = m.t * m.t * (3 - 2 * m.t); // acelera e trava
+      const u = m.sair ? 1 - e : e; // a sair faz o caminho ao contrário
+      const v = 1 - u;
+      p.set(0, 0, 0).addScaledVector(m.a, v * v).addScaledVector(m.b, 2 * v * u).addScaledVector(m.c, u * u);
+      d.copy(m.b).sub(m.a).multiplyScalar(2 * v).addScaledVector(m.c.clone().sub(m.b), 2 * u);
+      if (m.sair) d.negate();
+      m.obj.position.copy(p);
+      if (d.lengthSq() > 1e-6) m.obj.rotation.y = Math.atan2(d.x, d.z);
+      if (m.t >= 1) {
+        if (m.sair) this.cena.remove(m.obj);
+        this.manobras.splice(i, 1);
+      }
+    }
+  }
+
   estacionamento(meus: number[], equipa: number): void {
     const assinatura = `${meus.join(',')}|${Math.min(equipa, this.lugares.length)}`;
     if (assinatura === this.assinaturaLote) return;
+    const primeira = this.assinaturaLote === '';
     this.assinaturaLote = assinatura;
     const CORES = [0x6b7280, 0x9b1b1b, 0xd8d8d8, 0x2b2d31, 0x0f4c3a, 0xb45309, 0xf2f2f2, 0x2f7fb8, 0xe0b23a, 0x1f3a6e];
     this.lugares.forEach((l, k) => {
       const cor = k < meus.length ? meus[k] : k < meus.length + equipa ? CORES[(k * 7) % CORES.length] : null;
       const atual = this.carrosLote[k];
+      const daEquipa = k >= meus.length;
       if (atual && (cor === null || atual.userData.cor !== cor)) {
-        this.cena.remove(atual);
+        // Quem sai da equipa vai-se embora a conduzir; os teus carros desaparecem logo (foram vendidos).
+        if (atual.userData.equipa && cor === null && !primeira) this.manobra(atual, l, true);
+        else this.cena.remove(atual);
         this.carrosLote[k] = null;
       }
       if (cor !== null && !this.carrosLote[k]) {
         const c = this.criarCarro(cor, 900 + k);
         c.userData.cor = cor;
+        c.userData.equipa = daEquipa;
         c.position.set(l.x, -0.1, l.z);
         c.rotation.y = l.rot;
         this.cena.add(c);
         this.carrosLote[k] = c;
+        if (daEquipa && !primeira) this.manobra(c, l, false);
       }
     });
   }
@@ -601,7 +643,7 @@ export class Ambiente {
       for (let k = 0; k < n; k++) {
         const zl = zi + (k + 0.5) * largLugar;
         if (lado > 0 && Math.abs(zl - cz) < meioSaida + largLugar / 2) continue;
-        this.lugares.push({ x: xc - lado * 0.1, z: zl, rot: lado < 0 ? Math.PI / 2 : -Math.PI / 2 });
+        this.lugares.push({ x: xc - lado * 0.1, z: zl, rot: lado < 0 ? -Math.PI / 2 : Math.PI / 2 });
       }
     }
     const im = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.07, fundo).rotateX(-Math.PI / 2), pintura, tiras.length);
@@ -1153,6 +1195,7 @@ export class Ambiente {
       if (p[c.eixo] < c.min) p[c.eixo] = c.max;
     }
     this.uTempoRelva.value = this.tempo;
+    this.avancarManobras(dt);
     for (const e of this.especies) e.update(this.tempo);
   }
 }
