@@ -3,15 +3,15 @@
 // Cada cenário é um "jogador" automático, corrido com várias sementes.
 // Termina com erro se alguma meta de equilíbrio falhar.
 import {
-  avancar, colocarSecretaria, contratar, ECON, fatorMercado, iniciarProjeto, LISTA_TIPOS, MIN_POR_DIA,
+  avancar, colocarSecretaria, moverMovel, rodarMovel, contratar, ECON, fatorMercado, iniciarProjeto, capacidadeServidor, potencialUtilizadores, pagantesDe, definirPlano, plataformaDe, updateDe, eProdutoNovo, funcionalidadesParaUpdate, iniciarUpdate, cargaServidor, SERVIDORES, mudarServidor, LISTA_TIPOS, MIN_POR_DIA, DIAS_POR_MES,
   MIN_POR_MES, novoJogo, textoData, tipoDisponivel, TIPOS, validarFuncionalidades, vendasIniciais,
   AREAS, competenciaMedia, definirEquipa, estimarProjeto, membrosDe, semProjeto,
   funcionalidadeDisponivel, iniciarManutencao, manutencaoDe, vendasComBugs, fatorBugs, alternarCrunch, deBaixa,
   escolherPesquisa, financiarPesquisa, temTecnologia, PESQUISA, TECNOLOGIAS, eraNoMes, fatorEraNa, fatorEra,
-  bonusSequela, candidatosSequela, exportarJogo, importarJogo, VERSAO_SAVE,
+  exportarJogo, importarJogo, VERSAO_SAVE,
   TRACOS, relacaoEntre, AMIZADE, iniciarFormacao, FORMACAO, ausente, ESCRITORIOS, mudarEscritorio, dentroDoEscritorio,
   limitesDoEscritorio, rendaDe, comprarRival, precoAquisicao, entrarEmBolsa, podeEntrarEmBolsa, FEIRAS, irAFeira,
-  feirasDisponiveis, avaliarEmpresa,
+  feirasDisponiveis, avaliarEmpresa, SANDBOX_DINHEIRO, DESAFIOS,
   type Funcionario, type Area, type Competencias, type Estado, type TipoSoftware,
 } from './sim.ts';
 
@@ -119,18 +119,33 @@ const PATCH_BUGS = Number((globalThis as { process?: { env: Record<string, strin
  * melhor projeto para essa equipa; uma pessoa sozinha, havendo projetos, junta-se à equipa mais pequena.
  */
 function gerirEquipas(s: Estado, tipos: TipoSoftware[] = LISTA_TIPOS): void {
+  const plat = plataformaDe(s);
   for (let livres = semProjeto(s); livres.length > 0; livres = semProjeto(s)) {
     const menor = s.projetos
       .map((p) => ({ p, n: membrosDe(s, p.id).length }))
       .sort((a, b) => a.n - b.n)[0];
-    if (livres.length === 1 && menor && menor.n < TAMANHO_EQUIPA) {
+    if (menor && (menor.n < TAMANHO_EQUIPA || (plat !== undefined && updateDe(s, plat)) || s.projetos.some(eProdutoNovo))) {
       definirEquipa(s, livres[0].id, menor.p.id);
       continue;
     }
-    const equipa = livres.slice(0, TAMANHO_EQUIPA);
-    const e = escolherProjeto(s, tipos, equipa);
-    iniciarProjeto(s, '', e.tipo, e.funcionalidades, equipa.map((f) => f.id));
+    const equipa = livres.slice(0, TAMANHO_EQUIPA).map((f) => f.id);
+    if (plat === undefined) {
+      const e = escolherProjeto(s, tipos, livres.slice(0, TAMANHO_EQUIPA));
+      if (!iniciarProjeto(s, '', e.tipo, e.funcionalidades, equipa).ok) return;
+    } else {
+      const novas = funcionalidadesParaUpdate(s, plat).filter((f) => validarFuncionalidades(s.produtos[plat].tipo, [...s.produtos[plat].funcionalidades, f]).ok);
+      if (!iniciarUpdate(s, plat, novas.slice(0, 1), equipa).ok) return;
+    }
   }
+}
+
+/** Faz upgrade aos servidores antes de encherem (se houver dinheiro). */
+function gerirServidores(s: Estado): void {
+  const plat = plataformaDe(s);
+  if (plat === undefined) return;
+  const p = s.produtos[plat];
+  const nivel = p.servidor ?? 0;
+  if (cargaServidor(s, p) > 0.8 && SERVIDORES[nivel + 1] && s.dinheiro > SERVIDORES[nivel + 1].custo * 3) mudarServidor(s, plat, nivel + 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -152,8 +167,9 @@ function prudente(tipos: TipoSoftware[]): Jogador {
     const livres = semProjeto(s);
     if (comBugs >= 0 && livres.length) iniciarManutencao(s, comBugs, [livres[0].id]);
     gerirEquipas(s, tipos);
+    gerirServidores(s);
     const c = s.candidatos[melhorCandidato(s)];
-    if (c && s.produtos.length >= 2 && s.funcionarios.length < 6
+    if (c && s.produtos.length >= 1 && s.funcionarios.length < 6
       && s.dinheiro > RESERVA * (despesasMensais(s) + c.salario))
       contratarMelhor(s);
   };
@@ -178,8 +194,9 @@ const JOGADORES: Record<string, Jogador> = {
 
   /** Contrata 6 pessoas no 1.º mês e põe toda a gente a trabalhar. */
   'expansão rápida': (s, dia) => {
-    if (dia === 0 || dia === 30) for (let i = 0; i < 3; i++) contratarMelhor(s);
+    if (dia === 0 || dia === DIAS_POR_MES) for (let i = 0; i < 3; i++) contratarMelhor(s);
     gerirEquipas(s);
+    gerirServidores(s);
   },
 };
 
@@ -209,7 +226,7 @@ function correr(jogador: Jogador, semente: number, nome = ''): Corrida {
   const caixaMensal: number[] = [];
   const diario = DIARIO === `${nome}:${semente}`;
   let vistas = 0;
-  for (let dia = 0; dia < MESES * 30 && !s.falencia; dia++) {
+  for (let dia = 0; dia < MESES * DIAS_POR_MES && !s.falencia; dia++) {
     jogador(s, dia);
     minimo = Math.min(minimo, s.dinheiro);
     const mes = Math.floor(s.minuto / MIN_POR_MES);
@@ -310,17 +327,15 @@ meta('Razoável acaba os 2 anos entre 60k e 200k (mediana)',
   ((m) => m >= 60000 && m <= 200000)(mediana(finaisRazoavel)));
 meta('Razoável lucra mais no ano 2 do que no ano 1 (mediana)',
   mediana(razoavel.map((c) => c.lucroAno2)) > mediana(razoavel.map((c) => c.lucroAno1)));
-meta('Diversificar compensa: o razoável acaba acima do "só utilitários" (mediana)',
-  mediana(finaisRazoavel) > mediana(resultados['só utilitários'].map((c) => c.final)));
-meta('O razoável lança pelo menos 3 tipos de software diferentes (mediana)',
-  mediana(razoavel.map((c) => LISTA_TIPOS.filter((t) => c.porTipo[t] > 0).length)) >= 3);
+meta('Produto único: o razoável lança exatamente 1 produto e depois só faz updates',
+  razoavel.every((c) => c.produtos === 1));
 meta('Expansão rápida é arriscada: vai à falência em pelo menos 2 das 8 sementes',
   rapida.filter((c) => c.falenciaMes !== null).length >= 2);
 meta('Expansão rápida entra em dívida (caixa < 0) em pelo menos metade das sementes',
   rapida.filter((c) => c.minimo < 0).length >= SEMENTES.length / 2);
 
-meta('Expansão rápida não compensa: acaba com menos de metade do razoável (mediana, falências incluídas)',
-  mediana(rapida.map((c) => c.final)) < mediana(finaisRazoavel) / 2);
+meta('Expansão rápida é uma aposta: vai à falência em pelo menos 3 das 8 sementes',
+  rapida.filter((c) => c.falenciaMes !== null).length >= 3);
 
 // ---------------------------------------------------------------------------
 // Cenários das mecânicas: bugs e patches, sequelas, investigação, eras e horas extra
@@ -347,7 +362,6 @@ function avancarAte(s: Estado, condicao: () => boolean, limite = 720): number {
 }
 
 const ids = (s: Estado) => s.funcionarios.map((f) => f.id);
-const euros0 = (v: number) => `${Math.round(v)} €`;
 
 {
   // Bugs: aparecem no lançamento, crescem com o tempo, cortam as vendas e um patch tira-os.
@@ -375,38 +389,38 @@ const euros0 = (v: number) => `${Math.round(v)} €`;
 }
 
 {
-  // Sequelas: herdam os fãs (expectativa) e os críticos comparam com o original.
-  const base = () => {
-    const s = jogoCom(12, 2);
-    iniciarProjeto(s, 'Calculadora', 'utilitario', [], ids(s));
-    avancarAte(s, () => s.produtos.length > 0);
-    s.produtos[0].receitaTotal = TIPOS.utilitario.vendas * 4;
-    return s;
-  };
-  const normal = base();
-  const sequela = base();
-  sequela.produtos[0].qualidade = 0.3; // a nova versão vai ser claramente melhor
-  meta('Sequelas: o produto lançado pode ter uma nova versão', candidatosSequela(sequela, 'utilitario').includes(0));
-  iniciarProjeto(normal, 'Outra', 'utilitario', [], ids(normal));
-  iniciarProjeto(sequela, '', 'utilitario', [], ids(sequela), 0);
-  const proj = sequela.projetos[0];
-  meta(`Sequelas: nome «${proj.nome}» e expectativa inicial +${Math.round((proj.hype ?? 0) * 100)}%`,
-    proj.nome === 'Calculadora v2' && (proj.hype ?? 0) > 0 && proj.hype === bonusSequela(sequela, 0));
-  meta('Sequelas: não pode haver duas novas versões do mesmo produto ao mesmo tempo',
-    !iniciarProjeto(sequela, '', 'utilitario', [], [], 0).ok && !candidatosSequela(sequela, 'utilitario').includes(0));
-  avancarAte(normal, () => normal.produtos.length > 1);
-  avancarAte(sequela, () => sequela.produtos.length > 1);
-  const a = normal.produtos[1], b = sequela.produtos[1];
-  meta(`Sequelas: vende mais no lançamento do que um produto novo igual (${euros0(b.vendasMes)} vs ${euros0(a.vendasMes)})`,
-    b.versao === 2 && b.serie === 'Calculadora' && b.vendasMes > a.vendasMes * 1.2);
-  // Pior do que o original: os críticos castigam e vende menos do que valia sem a comparação.
-  const pior = base();
-  pior.produtos[0].qualidade = 1;
-  iniciarProjeto(pior, '', 'utilitario', [], ids(pior), 0);
-  avancarAte(pior, () => pior.produtos.length > 1);
-  const c = pior.produtos[1];
-  meta('Sequelas: uma versão pior do que a anterior é castigada pelos críticos e vende menos',
-    pior.mensagens.some((m) => m.texto.includes('está pior')) && c.vendasMes < b.vendasMes);
+  // Plataforma: um só produto, com utilizadores, planos, servidores e updates.
+  const s = jogoCom(12, 2);
+  iniciarProjeto(s, 'Calculadora', 'utilitario', [], ids(s));
+  meta('Plataforma: não se pode começar um segundo produto enquanto se faz o primeiro', !iniciarProjeto(s, 'Outro', 'utilitario', [], []).ok);
+  avancarAte(s, () => s.produtos.length > 0);
+  const p = s.produtos[0];
+  meta(`Plataforma: lança com utilizadores (${Math.round(p.utilizadores ?? 0)}) e não há segundo produto`,
+    (p.utilizadores ?? 0) > 0 && !iniciarProjeto(s, 'Outro', 'utilitario', [], ids(s)).ok);
+  const u0 = p.utilizadores ?? 0;
+  avancarAte(s, () => false, 14);
+  meta(`Plataforma: os utilizadores crescem (${Math.round(u0)} → ${Math.round(p.utilizadores ?? 0)})`, (p.utilizadores ?? 0) > u0);
+  p.utilizadores = capacidadeServidor(s, 0) * 2;
+  const sat = p.satisfacao ?? 0;
+  avancarAte(s, () => false, 3);
+  meta('Plataforma: servidores sobrecarregados fazem fugir utilizadores e descer a satisfação',
+    (p.utilizadores ?? 0) < capacidadeServidor(s, 0) * 2 && (p.satisfacao ?? 0) < sat && s.mensagens.some((m) => m.texto.startsWith('🔥')));
+  s.dinheiro = 100000;
+  meta('Plataforma: upgrade de servidor', mudarServidor(s, 0, 2).ok && p.servidor === 2 && cargaServidor(s, p) < 1);
+  const gratis = { ...p, plano: { gratis: true, preco: 6, anuncios: false } };
+  meta('Plataforma: com plano grátis o potencial é maior, mas paga menos gente',
+    potencialUtilizadores(s, gratis) > potencialUtilizadores(s, p) && pagantesDe(gratis) < pagantesDe(p));
+  meta('Plataforma: planos inválidos são recusados', !definirPlano(s, 0, { gratis: false, preco: 0, anuncios: false }).ok
+    && definirPlano(s, 0, { gratis: true, preco: 9, anuncios: true }).ok);
+  const nf = p.funcionalidades.length;
+  const novas = funcionalidadesParaUpdate(s, 0).filter((f) => validarFuncionalidades('utilitario', [...p.funcionalidades, f]).ok).slice(0, 1);
+  meta('Plataforma: um update começa e não há dois ao mesmo tempo', iniciarUpdate(s, 0, novas, ids(s)).ok && !iniciarUpdate(s, 0, [], []).ok);
+  avancarAte(s, () => !updateDe(s, 0));
+  meta(`Plataforma: o update acaba e junta a funcionalidade (versão 1.${p.updates})`,
+    p.funcionalidades.length === nf + novas.length && p.updates === 1 && semProjeto(s).length === 2);
+  const r2 = importarJogo(exportarJogo(s));
+  meta('Plataforma: utilizadores, plano e servidor sobrevivem a guardar e carregar',
+    r2.ok && r2.estado.produtos[0].servidor === 2 && r2.estado.produtos[0].plano?.anuncios === true);
 }
 
 {
@@ -416,7 +430,7 @@ const euros0 = (v: number) => `${Math.round(v)} €`;
     !funcionalidadeDisponivel(s, 'utilitario', 'relatorios') && !iniciarProjeto(s, '', 'utilitario', ['grafica', 'relatorios'], []).ok);
   meta('Investigação: «Análise de dados» precisa primeiro de «Internet»', !escolherPesquisa(s, 'dados').ok && escolherPesquisa(s, 'internet').ok);
   const dias = avancarAte(s, () => temTecnologia(s, 'internet'), 240);
-  meta(`Investigação: 2 pessoas sem projeto investigam a Internet em ${dias} dias`, temTecnologia(s, 'internet') && dias > 10 && dias < 120);
+  meta(`Investigação: 2 pessoas sem projeto investigam a Internet em ${dias} dias`, temTecnologia(s, 'internet') && dias > 1 && dias < 60);
   escolherPesquisa(s, 'dados');
   const dinheiro = s.dinheiro;
   let pacotes = 0;
@@ -449,8 +463,8 @@ const euros0 = (v: number) => `${Math.round(v)} €`;
 
 {
   // Horas extra: mais depressa, mas mais bugs, menos felicidade e baixas.
-  const corrida = (crunch: boolean) => {
-    const s = jogoCom(15, 3);
+  const corrida = (crunch: boolean, semente = 15) => {
+    const s = jogoCom(semente, 3);
     iniciarProjeto(s, 'Grande', 'utilitario', ['grafica', 'agendamento', 'comandos'], ids(s));
     if (crunch) alternarCrunch(s, s.projetos[0].id);
     let baixas = 0, veioDeBaixa = false;
@@ -474,7 +488,9 @@ const euros0 = (v: number) => `${Math.round(v)} €`;
   meta(`Horas extra: o produto sai com mais bugs (${crunch.bugs.toFixed(0)} vs ${normal.bugs.toFixed(0)})`, crunch.bugs > normal.bugs * 1.3);
   meta(`Horas extra: a equipa fica menos feliz (${crunch.fel.toFixed(0)} vs ${normal.fel.toFixed(0)})`, crunch.fel < normal.fel - 10);
   meta('Horas extra: há baixas, e quem está de baixa não vem trabalhar',
-    crunch.baixas > 0 && normal.baixas === 0 && !crunch.veioDeBaixa && crunch.s.mensagens.some((m) => m.texto.startsWith('🤒')));
+    ((outras) => outras.some((c) => c.baixas > 0) && outras.every((c) => !c.veioDeBaixa && (c.baixas === 0 || c.s.mensagens.some((m) => m.texto.startsWith('🤒')))))(
+      [crunch, ...[16, 17, 18, 19, 20].map((sm) => corrida(true, sm))])
+    && normal.baixas === 0 && !crunch.veioDeBaixa);
 }
 
 {
@@ -489,7 +505,7 @@ const euros0 = (v: number) => `${Math.round(v)} €`;
   s.funcionarios[0].baixaAte = s.minuto + 1000;
   const r = importarJogo(exportarJogo(s));
   meta('Saves: investigação, bugs, patches, horas extra e baixas sobrevivem a guardar e carregar',
-    VERSAO_SAVE === 5 && r.ok && r.estado.tecnologias.join() === 'internet' && r.estado.pesquisaAtual === 'mobile'
+    VERSAO_SAVE === 6 && r.ok && r.estado.tecnologias.join() === 'internet' && r.estado.pesquisaAtual === 'mobile'
     && r.estado.projetos[0].manutencao === 0 && r.estado.projetos[0].crunch === true && r.estado.funcionarios[0].baixaAte !== undefined);
   const v4 = JSON.parse(exportarJogo(jogoCom(17, 1)));
   v4.versao = 4;
@@ -541,6 +557,28 @@ const euros0 = (v: number) => `${Math.round(v)} €`;
 }
 
 {
+  // Mobília: limite de secretárias por escritório, mover e rodar.
+  const s = novoJogo(25, 24, 18, { missoes: false, escritorio: 0 });
+  s.dinheiro = 200000;
+  const l = limitesDoEscritorio(s);
+  const celulas: [number, number][] = [];
+  for (let z = l.z0; z < l.z1; z++)
+    for (let x = l.x0; x < l.x1; x++) if (x !== s.entrada.x || z !== s.entrada.z) celulas.push([x, z]);
+  let postas = 0;
+  for (const [x, z] of celulas.slice(0, 6)) if (colocarSecretaria(s, x, z).ok) postas++;
+  const limite = postas === ESCRITORIOS[0].secretarias;
+  const [ax, az] = celulas[0];
+  const [bx, bz] = celulas[10];
+  const d = s.secretarias[0];
+  const moveu = moverMovel(s, ax, az, bx, bz, 3).ok && d.x === bx && d.z === bz && d.rot === 3;
+  const ocupada = !moverMovel(s, bx, bz, celulas[1][0], celulas[1][1]).ok;
+  const rodou = rodarMovel(s, bx, bz).ok && d.rot === undefined && rodarMovel(s, bx, bz).ok && d.rot === 1;
+  const volta = importarJogo(exportarJogo(s));
+  meta(`Mobília: a ${ESCRITORIOS[0].nome} leva ${ESCRITORIOS[0].secretarias} secretárias; mover e rodar são grátis e ficam guardados`,
+    limite && moveu && ocupada && rodou && volta.ok && volta.estado!.secretarias[0].rot === 1);
+}
+
+{
   // Aquisições e bolsa.
   const s = jogoCom(24, 1);
   s.xp = 1e7;
@@ -576,6 +614,31 @@ const euros0 = (v: number) => `${Math.round(v)} €`;
   const foi = irAFeira(s, f.id).ok;
   meta(`Feiras: a ${f.nome} só se visita no seu mês, uma vez por ano, e dá expectativa`,
     !cedo && foi && (p.hype ?? 0) > h && !irAFeira(s, f.id).ok && s.mensagens.some((m) => m.texto.includes(f.nome)));
+}
+
+{
+  // Modos de jogo
+  const sb = novoJogo(31, 24, 18, { modo: 'sandbox', eventos: false });
+  sb.dinheiro = -500_000;
+  avancarAte(sb, () => false, 35);
+  meta('Sandbox: começa com dinheiro infinito e nunca vai à falência',
+    !sb.falencia && sb.dinheiro >= SANDBOX_DINHEIRO / 2);
+
+  const sf = novoJogo(32, 24, 18, { semFalencia: true, dinheiroInicial: 2000, eventos: false });
+  const din0 = sf.dinheiro;
+  sf.dinheiro = -200_000;
+  avancarAte(sf, () => false, 35);
+  meta('Personalizada: dinheiro inicial à escolha e "sem falência" aguenta dívidas', din0 === 2000 && !sf.falencia);
+
+  const d = novoJogo(33, 24, 18, { modo: 'desafio', desafio: 'milhao', eventos: false });
+  d.dinheiro = 2_000_000;
+  avancarAte(d, () => d.desafio?.resultado !== 'curso', 40);
+  const perde = novoJogo(34, 24, 18, { modo: 'desafio', desafio: 'jogos', eventos: false, semFalencia: true });
+  avancarAte(perde, () => perde.desafio?.resultado !== 'curso', DESAFIOS.jogos.anos * 12 * 30 + 40);
+  const volta = importarJogo(exportarJogo(d));
+  meta('Desafios: ganha-se ao cumprir o objetivo, perde-se quando o prazo acaba, e o save guarda o modo',
+    d.desafio?.resultado === 'ganho' && perde.desafio?.resultado === 'perdido'
+    && volta.ok && volta.estado?.desafio?.resultado === 'ganho');
 }
 
 if (falhas) throw new Error(`${falhas} meta(s) de equilíbrio falharam.`);

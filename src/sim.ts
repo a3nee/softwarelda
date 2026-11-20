@@ -6,7 +6,11 @@
 // ---------------------------------------------------------------------------
 
 export const MIN_POR_DIA = 24 * 60;
-export const DIAS_POR_MES = 30;
+export const DIAS_POR_MES = 7; // meses curtos: o jogo anda mais depressa
+/** Os efeitos por dia (cansaço, baixas, amizades) foram pensados para meses de 30 dias: isto mantém o peso por mês. */
+export const ESCALA_DIA = 30 / DIAS_POR_MES;
+/** O trabalho por minuto é escalado para que um mês renda o mesmo que renderia com 30 dias. */
+export const RITMO_TRABALHO = 30 / DIAS_POR_MES;
 export const MIN_POR_MES = MIN_POR_DIA * DIAS_POR_MES;
 
 export const HORA_CHEGADA = 8; // começam a chegar
@@ -49,7 +53,7 @@ export function competenciaMedia(c: Competencias): number {
   return (c.programacao + c.design + c.testes) / 3;
 }
 
-export type TipoSoftware = 'utilitario' | 'editor' | 'antivirus' | 'jogo';
+export type TipoSoftware = 'utilitario' | 'editor' | 'antivirus' | 'jogo' | 'ia';
 
 export interface Funcionalidade {
   id: string;
@@ -157,6 +161,28 @@ export const TIPOS: Record<TipoSoftware, DefTipo> = {
       { id: 'mundosgerados', nome: 'Mundos gerados por IA', trabalho: 18000, valor: 0.55, requer: [], tecnologia: 'iagenerativa' },
     ],
   },
+  ia: {
+    nome: 'Assistente de IA',
+    plural: 'Assistentes de IA',
+    descricao: 'Um chatbot com modelos próprios. Mercado enorme, mas cada utilizador gasta GPU: os servidores custam caro.',
+    produtosNecessarios: 0,
+    trabalho: 45000,
+    vendas: 20000,
+    queda: 0.85,
+    exigencia: 1.3,
+    areas: { programacao: 0.55, design: 0.15, testes: 0.3 },
+    funcionalidades: [
+      { id: 'chatweb', nome: 'Chat na web', trabalho: 6000, valor: 0.25, requer: [] },
+      { id: 'memoria', nome: 'Memória das conversas', trabalho: 8000, valor: 0.25, requer: ['chatweb'] },
+      { id: 'ficheiros', nome: 'Ler PDFs e ficheiros', trabalho: 9000, valor: 0.3, requer: [] },
+      { id: 'api', nome: 'API para programadores', trabalho: 10000, valor: 0.35, requer: [], tecnologia: 'servidores' },
+      { id: 'appia', nome: 'App para telemóvel', trabalho: 10000, valor: 0.4, requer: ['chatweb'], tecnologia: 'mobile' },
+      { id: 'voz', nome: 'Modo de voz', trabalho: 12000, valor: 0.4, requer: [], tecnologia: 'dados' },
+      { id: 'imagens', nome: 'Gerar imagens', trabalho: 16000, valor: 0.55, requer: [], tecnologia: 'iagenerativa' },
+      { id: 'agentes', nome: 'Agentes que usam o computador', trabalho: 20000, valor: 0.6, requer: ['ficheiros'], tecnologia: 'ia' },
+      { id: 'empresas', nome: 'Plano para empresas (segurança)', trabalho: 12000, valor: 0.45, requer: ['api'], tecnologia: 'criptografia' },
+    ],
+  },
 };
 
 export const LISTA_TIPOS = Object.keys(TIPOS) as TipoSoftware[];
@@ -213,8 +239,9 @@ export function valorDoProjeto(tipo: TipoSoftware, ids: string[]): number {
   return 1 + ids.reduce((t, id) => t + (funcionalidade(tipo, id)?.valor ?? 0), 0);
 }
 
-export function tipoDisponivel(s: Estado, tipo: TipoSoftware): boolean {
-  return s.produtos.length >= TIPOS[tipo].produtosNecessarios;
+/** Com o produto único, qualquer tipo pode ser o negócio da empresa logo desde o início. */
+export function tipoDisponivel(_s: Estado, tipo: TipoSoftware): boolean {
+  return !!TIPOS[tipo];
 }
 
 /** Uma funcionalidade está disponível se não precisar de tecnologia ou se esta já foi investigada. */
@@ -300,6 +327,7 @@ export interface Secretaria {
   id: number;
   x: number;
   z: number;
+  rot?: number; // quartos de volta (0-3); sem valor: virada para −z
 }
 
 export interface Projeto {
@@ -315,6 +343,7 @@ export interface Projeto {
   campanhas?: IdCampanha[]; // campanhas já feitas (cada uma só uma vez por projeto)
   contrato?: ContratoAtivo; // trabalho por encomenda: paga no fim e não vira produto
   manutencao?: number; // patch: índice em s.produtos do produto cujos bugs se estão a corrigir
+  update?: number; // update: índice em s.produtos da plataforma que recebe as funcionalidades novas
   sequela?: { de: number; versao: number }; // nova versão do produto s.produtos[de]
   crunch?: boolean; // horas extra: trabalha-se mais depressa, mas cansa e cria bugs
   crunchFeito?: number; // pontos de trabalho feitos em horas extra
@@ -334,6 +363,28 @@ export interface Produto {
   avisoBugs?: boolean; // já se avisou que tem bugs a mais
   serie?: string; // nome da série (o do produto original); só as sequelas o têm
   versao?: number; // 2, 3… nas sequelas
+  // Plataforma: o produto único da empresa, que vive para sempre. Só os produtos lançados com o sistema novo
+  // têm `utilizadores`; os antigos (saves de versões anteriores) continuam a vender e a cair como antes.
+  utilizadores?: number; // utilizadores ativos
+  pagantes?: number; // dos ativos, quantos pagam o plano (calculado todos os dias)
+  plano?: PlanoProduto;
+  servidor?: number; // índice em SERVIDORES
+  satisfacao?: number; // 0–100
+  ultimoUpdate?: number; // minuto do último update (ou do lançamento)
+  updates?: number; // updates lançados (a versão é 1.<updates>)
+  receitaMes?: number; // receitas acumuladas no mês corrente
+  custoMes?: number; // custo dos servidores acumulado no mês corrente
+  quedasMes?: number; // dias com os servidores sobrecarregados neste mês
+  historicoUtilizadores?: number[]; // utilizadores no fim de cada mês (para o gráfico)
+  campanhasMes?: Partial<Record<IdCampanha, number>>; // campanha → mês de jogo em que foi feita
+  avisoCarga?: boolean; // já se avisou que os servidores estão quase cheios
+}
+
+/** Os planos de preços da plataforma. */
+export interface PlanoProduto {
+  gratis: boolean; // há um plano grátis (muito mais utilizadores, mas só alguns pagam)
+  preco: number; // € por mês do plano pago (0 = não há plano pago)
+  anuncios: boolean; // anúncios no plano grátis (dão dinheiro, mas irritam)
 }
 
 /** Para a interface escolher cor, som e se mostra um aviso flutuante. */
@@ -377,6 +428,7 @@ export interface Objeto {
   tipo: TipoObjeto;
   x: number;
   z: number;
+  rot?: number; // quartos de volta (0-3)
 }
 
 // ---------------------------------------------------------------------------
@@ -397,6 +449,10 @@ export interface OpcoesJogo {
   eventos?: boolean; // eventos aleatórios no fecho do mês
   missoes?: boolean; // missões com recompensas (os testes de equilíbrio correm sem elas)
   escritorio?: number; // começa num escritório pequeno (índice em ESCRITORIOS); sem valor: o terreno todo
+  modo?: Modo; // carreira (por omissão), sandbox ou desafio
+  desafio?: IdDesafio; // só no modo desafio
+  dinheiroInicial?: number; // dificuldade personalizada: substitui o dinheiro da dificuldade
+  semFalencia?: boolean; // dificuldade personalizada: a empresa pode ficar com dívidas sem falir
 }
 
 /** Um fecho de mês, para os gráficos das estatísticas. */
@@ -454,6 +510,9 @@ export interface Estado {
   escritorio?: number; // índice em ESCRITORIOS (sem valor: o terreno todo)
   subsidiarias?: Subsidiaria[]; // concorrentes comprados
   bolsa?: { acoes: number; historico: number[] }; // depois da entrada em bolsa
+  modo?: Modo; // sem valor: carreira
+  desafio?: { id: IdDesafio; resultado: 'curso' | 'ganho' | 'perdido'; mesFim?: number };
+  semFalencia?: boolean;
   feiras?: Record<string, number>; // id da feira → último ano em que se foi
 }
 
@@ -494,7 +553,9 @@ export function novoJogo(semente = 12345, largura = 24, altura = 18, opcoes: Opc
     altura,
     entrada: { x: 0, z: Math.floor(altura / 2) },
     minuto: HORA_INICIO * 60 - 90,
-    dinheiro: dificuldade === 'normal' ? ECON.dinheiroInicial : DIFICULDADES[dificuldade].dinheiro,
+    dinheiro: opcoes.modo === 'sandbox' ? SANDBOX_DINHEIRO
+      : opcoes.dinheiroInicial !== undefined ? Math.max(1000, Math.min(10_000_000, Math.round(opcoes.dinheiroInicial)))
+      : dificuldade === 'normal' ? ECON.dinheiroInicial : DIFICULDADES[dificuldade].dinheiro,
     funcionarios: [],
     candidatos: [],
     secretarias: [],
@@ -531,11 +592,15 @@ export function novoJogo(semente = 12345, largura = 24, altura = 18, opcoes: Opc
     pesquisaProgresso: 0,
     pesquisaReserva: 0,
     ...(opcoes.escritorio !== undefined ? { escritorio: opcoes.escritorio } : {}),
+    ...(opcoes.modo && opcoes.modo !== 'carreira' ? { modo: opcoes.modo } : {}),
+    ...(opcoes.modo === 'desafio' ? { desafio: { id: opcoes.desafio ?? 'milhao', resultado: 'curso' as const } } : {}),
+    ...(opcoes.semFalencia || opcoes.modo === 'sandbox' ? { semFalencia: true } : {}),
   };
   gerarOfertas(s);
   gerarCandidatos(s);
   completarMissoes(s);
   mensagem(s, `Bem-vindo à ${nome}! Coloca secretárias e contrata a tua equipa.`);
+  if (s.desafio) mensagem(s, `🎯 Desafio: ${DESAFIOS[s.desafio.id].descricao}`, 'evento');
   return s;
 }
 
@@ -607,16 +672,26 @@ export function secretariaEm(s: Estado, x: number, z: number): Secretaria | unde
   return s.secretarias.find((d) => d.x === x && d.z === z);
 }
 
-export function colocarSecretaria(s: Estado, x: number, z: number): Resultado {
+/** Máximo de secretárias no escritório atual (sem escritório: sem limite). */
+export function limiteSecretarias(s: Estado): number {
+  const e = s.escritorio === undefined ? undefined : ESCRITORIOS[s.escritorio];
+  return e ? e.secretarias : Infinity;
+}
+
+const rodar = (rot: number) => ((Math.round(rot) % 4) + 4) % 4;
+
+export function colocarSecretaria(s: Estado, x: number, z: number, rot = 0): Resultado {
   if (!dentroDaGrelha(s, x, z)) return { ok: false, msg: 'Fora do terreno.' };
   if (x === s.entrada.x && z === s.entrada.z)
     return { ok: false, msg: 'Não podes bloquear a entrada.' };
   if (!dentroDoEscritorio(s, x, z)) return { ok: false, msg: FORA_DO_ESCRITORIO };
   if (secretariaEm(s, x, z)) return { ok: false, msg: 'Já há uma secretária aqui.' };
   if (objetoEm(s, x, z)) return { ok: false, msg: 'Já há um objeto aqui.' };
+  if (s.secretarias.length >= limiteSecretarias(s))
+    return { ok: false, msg: `Este escritório só leva ${limiteSecretarias(s)} secretárias. Muda-te para um maior.` };
   if (s.dinheiro < ECON.custoSecretaria) return { ok: false, msg: 'Dinheiro insuficiente.' };
   s.dinheiro -= ECON.custoSecretaria;
-  s.secretarias.push({ id: s.proximoId++, x, z });
+  s.secretarias.push({ id: s.proximoId++, x, z, ...(rodar(rot) ? { rot: rodar(rot) } : {}) });
   s.versaoMapa++;
   atribuirSecretarias(s);
   return { ok: true };
@@ -641,7 +716,7 @@ export function objetoEm(s: Estado, x: number, z: number): Objeto | undefined {
   return s.objetos.find((o) => o.x === x && o.z === z);
 }
 
-export function colocarObjeto(s: Estado, tipo: TipoObjeto, x: number, z: number): Resultado {
+export function colocarObjeto(s: Estado, tipo: TipoObjeto, x: number, z: number, rot = 0): Resultado {
   const def = OBJETOS[tipo];
   if (!def) return { ok: false };
   if (!dentroDaGrelha(s, x, z)) return { ok: false, msg: 'Fora do terreno.' };
@@ -650,7 +725,7 @@ export function colocarObjeto(s: Estado, tipo: TipoObjeto, x: number, z: number)
   if (secretariaEm(s, x, z) || objetoEm(s, x, z)) return { ok: false, msg: 'Esta célula já está ocupada.' };
   if (s.dinheiro < def.custo) return { ok: false, msg: 'Dinheiro insuficiente.' };
   s.dinheiro -= def.custo;
-  s.objetos.push({ id: s.proximoId++, tipo, x, z });
+  s.objetos.push({ id: s.proximoId++, tipo, x, z, ...(rodar(rot) ? { rot: rodar(rot) } : {}) });
   s.versaoMapa++;
   verificarConquistas(s);
   return { ok: true };
@@ -661,6 +736,46 @@ export function removerObjeto(s: Estado, x: number, z: number): Resultado {
   if (!o) return { ok: false };
   s.objetos = s.objetos.filter((d) => d !== o);
   s.versaoMapa++;
+  return { ok: true };
+}
+
+/** Roda (um quarto de volta) a secretária ou o objeto na célula. Grátis. */
+export function rodarMovel(s: Estado, x: number, z: number): Resultado {
+  const m = secretariaEm(s, x, z) ?? objetoEm(s, x, z);
+  if (!m) return { ok: false };
+  const r = rodar((m.rot ?? 0) + 1);
+  if (r) m.rot = r;
+  else delete m.rot;
+  s.versaoMapa++;
+  return { ok: true };
+}
+
+/** Muda a secretária ou o objeto de (x, z) para (nx, nz), com a rotação dada. Grátis. */
+export function moverMovel(s: Estado, x: number, z: number, nx: number, nz: number, rot?: number): Resultado {
+  const d = secretariaEm(s, x, z);
+  const m = d ?? objetoEm(s, x, z);
+  if (!m) return { ok: false, msg: 'Não há nada para mover aqui.' };
+  const mesma = nx === x && nz === z;
+  if (!mesma) {
+    if (!dentroDaGrelha(s, nx, nz)) return { ok: false, msg: 'Fora do terreno.' };
+    if (!dentroDoEscritorio(s, nx, nz)) return { ok: false, msg: FORA_DO_ESCRITORIO };
+    if (nx === s.entrada.x && nz === s.entrada.z) return { ok: false, msg: 'Não podes bloquear a entrada.' };
+    if (secretariaEm(s, nx, nz) || objetoEm(s, nx, nz)) return { ok: false, msg: 'Esta célula já está ocupada.' };
+  }
+  m.x = nx;
+  m.z = nz;
+  if (rot !== undefined) {
+    if (rodar(rot)) m.rot = rodar(rot);
+    else delete m.rot;
+  }
+  s.versaoMapa++;
+  // Quem estava sentado nesta secretária levanta-se e vai para o novo lugar.
+  if (d && !mesma)
+    for (const f of s.funcionarios)
+      if (f.secretariaId === d.id && f.dentro && f.estado === 'aTrabalhar') {
+        f.estado = 'aCaminho';
+        recalcular(s, f);
+      }
   return { ok: true };
 }
 
@@ -972,6 +1087,10 @@ export function iniciarProjeto(
   }
   if (equipa.some((id) => !s.funcionarios.some((f) => f.id === id)))
     return { ok: false, msg: 'Funcionário desconhecido.' };
+  if (plataformaDe(s) !== undefined)
+    return { ok: false, msg: 'A empresa já tem o seu produto. Faz-lhe updates com funcionalidades novas (separador Produtos).' };
+  if (s.projetos.some(eProdutoNovo))
+    return { ok: false, msg: 'Já estás a desenvolver o produto da empresa.' };
   let sequela: Projeto['sequela'];
   let hype = 0;
   if (sequelaDe !== null) {
@@ -1108,7 +1227,7 @@ export function totalDaArea(p: Pick<Projeto, 'tipo' | 'trabalhoTotal' | 'manuten
 
 /** Pontos por minuto de um trabalhador numa área. */
 export function rendimento(f: Trabalhador, a: Area): number {
-  return f.competencias[a] * (0.5 + f.felicidade / 200);
+  return f.competencias[a] * (0.5 + f.felicidade / 200) * RITMO_TRABALHO;
 }
 
 /** Cada um trabalha na área por acabar em que é mais competente (null se já está tudo feito). */
@@ -1196,6 +1315,8 @@ function simularAteAcabar(
 function lancarProjeto(s: Estado, p: Projeto): void {
   if (p.contrato) return entregarContrato(s, p);
   if (p.manutencao !== undefined) return concluirManutencao(s, p);
+  if (p.update !== undefined) return concluirUpdate(s, p);
+  const plataforma = plataformaDe(s) === undefined;
   const qualidade = Math.min(1, qualidadeDoProjeto(p) + bonusQualidade(s));
   const mercado = fatorMercado(s, p.tipo);
   const marketing = (temMelhoria(s, 'marketing') ? 1.15 : 1) * (temTecnologia(s, 'dados') ? 1.1 : 1);
@@ -1223,6 +1344,7 @@ function lancarProjeto(s: Estado, p: Projeto): void {
     produto.serie = serieDe(original);
     produto.versao = p.sequela.versao;
   }
+  if (plataforma) iniciarPlataforma(s, produto, p.hype ?? 0, marketing);
   s.produtos.push(produto);
   s.projetos = s.projetos.filter((o) => o !== p);
   for (const f of membrosDe(s, p.id)) {
@@ -1230,9 +1352,9 @@ function lancarProjeto(s: Estado, p: Projeto): void {
     if (temMelhoria(s, 'premios')) f.felicidade = Math.min(100, f.felicidade + 15);
   }
   const perda = Math.round((1 - mercado) * 100);
-  const novos = LISTA_TIPOS.filter((t) => TIPOS[t].produtosNecessarios === s.produtos.length);
   mensagem(s, `«${produto.nome}» foi lançado! Qualidade ${Math.round(qualidade * 100)}%. A equipa está livre.`
-    + (perda >= 5 ? ` O mercado de ${TIPOS[p.tipo].plural.toLowerCase()} está saturado: vendas −${perda}%.` : ''),
+    + (plataforma ? ` Já tem ${Math.round(produto.utilizadores ?? 0).toLocaleString('pt-PT')} utilizadores: vigia os servidores e faz updates para crescer.`
+      : perda >= 5 ? ` O mercado de ${TIPOS[p.tipo].plural.toLowerCase()} está saturado: vendas −${perda}%.` : ''),
   'lancamento');
   if (original) {
     const pontos = Math.round(Math.abs(diferenca) * 100);
@@ -1246,7 +1368,6 @@ function lancarProjeto(s: Estado, p: Projeto): void {
     produto.avisoBugs = true;
     mensagem(s, `🐞 «${produto.nome}» saiu com ${produto.bugs} bugs. Põe uma equipa a fazer um patch (separador Produtos).`, 'aviso');
   }
-  for (const t of novos) mensagem(s, `Novo tipo de software disponível: ${TIPOS[t].nome.toLowerCase()}.`, 'desbloqueio');
   ganharXp(s, xpDeLancamento(p.tipo, qualidade));
   verificarConquistas(s);
 }
@@ -1413,7 +1534,8 @@ function andar(f: Funcionario): boolean {
 
 // Versão 2: nome da empresa, dificuldade, eventos, decoração, histórico e conquistas.
 // Versão 5: investigação (tecnologias), bugs, sequelas, horas extra e baixas.
-export const VERSAO_SAVE = 5;
+// Versão 6: o produto único (plataforma com utilizadores, servidores e planos).
+export const VERSAO_SAVE = 6;
 
 export interface Save {
   versao: number;
@@ -1444,6 +1566,11 @@ export function importarJogo(texto: string): ResultadoCarregar {
   if (o.versao < 5 && objeto(o.estado)) migrarDaVersao4(o.estado);
   const erro = erroNoEstado(o.estado);
   if (erro) return { ok: false, msg: `Jogo guardado inválido: ${erro}.` };
+  const produtos = (o.estado as Record<string, unknown>).produtos as Record<string, unknown>[];
+  for (const p of produtos) {
+    const e = erroNaPlataforma(p);
+    if (e) return { ok: false, msg: `Jogo guardado inválido: ${e}.` };
+  }
   return { ok: true, estado: o.estado as Estado, guardadoEm: typeof o.guardadoEm === 'number' ? o.guardadoEm : 0 };
 }
 
@@ -1537,6 +1664,7 @@ function erroNoEstado(e: unknown): string | null {
   const secretarias = new Set<number>();
   for (const d of e.secretarias as unknown[]) {
     if (!objeto(d) || !idValido(d.id) || !celulaValida(d, L, A)) return 'secretária';
+    if (d.rot !== undefined && !(inteiro(d.rot) && d.rot >= 0 && d.rot < 4)) return 'rotação da secretária';
     if (secretarias.has(d.id as number)) return 'secretária repetida';
     secretarias.add(d.id as number);
   }
@@ -1609,6 +1737,7 @@ function erroNoEstado(e: unknown): string | null {
   for (const o of e.objetos as unknown[]) {
     if (!objeto(o) || !idValido(o.id) || !celulaValida(o, L, A) || !inteiro(o.x) || !inteiro(o.z)) return 'objeto';
     if (typeof o.tipo !== 'string' || !(o.tipo in OBJETOS)) return 'objeto desconhecido';
+    if (o.rot !== undefined && !(inteiro(o.rot) && o.rot >= 0 && o.rot < 4)) return 'rotação do objeto';
     if (ids.has(o.id as number)) return 'objeto repetido';
     ids.add(o.id as number);
     const c = (o.z as number) * L + (o.x as number);
@@ -1743,7 +1872,7 @@ function fimDoDia(s: Estado): void {
     // Horas extra: cansam todos os dias e podem acabar em baixa (o aleatório só é usado com horas extra).
     const p = f.projetoId === null ? undefined : s.projetos.find((o) => o.id === f.projetoId);
     if (p?.crunch && !ausente(s, f)) {
-      f.felicidade = Math.max(0, f.felicidade - CRUNCH.felicidadeDia * cansacoDosTracos(f));
+      f.felicidade = Math.max(0, f.felicidade - CRUNCH.felicidadeDia * 1.6 * cansacoDosTracos(f));
       if (aleatorio(s) < chanceDeBaixa(f)) {
         const dias = CRUNCH.baixaMin + Math.floor(aleatorio(s) * (CRUNCH.baixaMax - CRUNCH.baixaMin + 1));
         f.baixaAte = s.minuto + dias * MIN_POR_DIA;
@@ -1752,6 +1881,7 @@ function fimDoDia(s: Estado): void {
     }
   }
   diaPessoal(s);
+  for (const p of s.produtos) if (p.utilizadores !== undefined) diaDaPlataforma(s, p);
   for (const p of s.projetos)
     if (p.contrato && !p.contrato.atrasado && s.minuto > p.contrato.prazo) {
       p.contrato.atrasado = true;
@@ -1762,7 +1892,21 @@ function fimDoDia(s: Estado): void {
 
 function fimDoMes(s: Estado): void {
   let receitas = 0;
+  let custosPlataforma = 0;
   for (const p of s.produtos) {
+    if (p.utilizadores !== undefined) {
+      const r = Math.round(p.receitaMes ?? 0);
+      receitas += r;
+      p.receitaTotal += r;
+      custosPlataforma += Math.round(p.custoMes ?? 0);
+      p.receitaMes = 0;
+      p.custoMes = 0;
+      p.quedasMes = 0;
+      (p.historicoUtilizadores ??= []).push(Math.round(p.utilizadores));
+      if (p.historicoUtilizadores.length > 120) p.historicoUtilizadores.shift();
+      acumularBugs(s, p);
+      continue;
+    }
     const vendas = vendasComBugs(p);
     receitas += vendas;
     p.receitaTotal += vendas;
@@ -1772,7 +1916,7 @@ function fimDoMes(s: Estado): void {
   }
   mudarDeEra(s);
   const salarios = s.funcionarios.reduce((t, f) => t + f.salario, 0);
-  const despesas = salarios + rendaDe(s);
+  const despesas = salarios + rendaDe(s) + custosPlataforma;
   if (s.subsidiarias?.length) receberDasSubsidiarias(s);
   const extra = s.extraMes;
   s.extraMes = 0;
@@ -1790,7 +1934,8 @@ function fimDoMes(s: Estado): void {
   }
   if (receitas + extra > despesas + dividendos) ganharXp(s, 20 * Math.min(5, serieDeLucro(s)));
   gerarCandidatos(s);
-  if (s.dinheiro < ECON.limiteFalencia) {
+  if (s.modo === 'sandbox' && s.dinheiro < SANDBOX_DINHEIRO / 10) s.dinheiro = SANDBOX_DINHEIRO;
+  if (s.dinheiro < ECON.limiteFalencia && !s.semFalencia) {
     s.falencia = true;
     mensagem(s, 'Falência! A empresa ficou sem dinheiro.', 'falencia');
     return;
@@ -1802,6 +1947,7 @@ function fimDoMes(s: Estado): void {
   gerarOfertas(s);
   if (s.eventos && aleatorio(s) < PROBABILIDADE_EVENTO) eventoAleatorio(s);
   verificarConquistas(s);
+  verificarDesafio(s);
 }
 
 // ---------------------------------------------------------------------------
@@ -1827,7 +1973,7 @@ export const EVENTOS: Record<string, DefEvento> = {
     possivel: (s) => comVendas(s).length > 0,
     aplicar: (s) => {
       const p = escolher(s, comVendas(s));
-      p.vendasMes *= 1.5;
+      impulsionar(p, 1.5);
       return `📰 Uma revista de tecnologia elogiou «${p.nome}»: as vendas sobem 50%.`;
     },
   },
@@ -1886,7 +2032,7 @@ export const EVENTOS: Record<string, DefEvento> = {
     possivel: (s) => comVendas(s).length > 0,
     aplicar: (s) => {
       const p = escolher(s, comVendas(s));
-      p.vendasMes *= 0.7;
+      impulsionar(p, 0.7);
       return `🏴 «${p.nome}» foi pirateado: as vendas descem 30%.`;
     },
   },
@@ -2302,7 +2448,9 @@ export function vendasFuturas(vendasMes: number, queda: number): number {
 }
 
 export function avaliarEmpresa(s: Estado): Avaliacao {
-  const produtos = s.produtos.reduce((t, p) => t + vendasFuturas(vendasComBugs(p), quedaEfetiva(s, p.tipo)), 0);
+  const produtos = s.produtos.reduce((t, p) => t + (p.utilizadores !== undefined
+    ? vendasFuturas(Math.max(0, lucroMensal(s, p)), PLATAFORMA.quedaAvaliacao)
+    : vendasFuturas(vendasComBugs(p), quedaEfetiva(s, p.tipo))), 0);
   const projetos = s.projetos.reduce((t, p) => {
     const feito = Math.min(1, p.trabalhoFeito / p.trabalhoTotal);
     if (p.contrato) return t + feito * p.contrato.pagamento;
@@ -2344,6 +2492,7 @@ const SUFIXOS: Record<TipoSoftware, string[]> = {
   editor: ['Notas', 'Escreve', 'Docs', 'Pad'],
   antivirus: ['Guarda', 'Escudo', 'Seguro', 'Cofre'],
   jogo: ['Quest', 'Corrida', 'Lendas', 'Saga'],
+  ia: ['GPT', 'Mente', 'Neural', 'Chat'],
 };
 
 const h = (texto: string) => hashTexto(texto);
@@ -2758,7 +2907,7 @@ export function deBaixa(s: Estado, f: Funcionario): boolean {
 
 /** Probabilidade de baixa por cada dia de horas extra. */
 export function chanceDeBaixa(f: Funcionario): number {
-  return CRUNCH.baixaBase + CRUNCH.baixaInfeliz * Math.max(0, (60 - f.felicidade) / 60);
+  return Math.min(0.5, (CRUNCH.baixaBase + CRUNCH.baixaInfeliz * Math.max(0, (60 - f.felicidade) / 60)) * ESCALA_DIA);
 }
 
 /** Liga ou desliga as horas extra de um projeto (por omissão, troca). */
@@ -2832,7 +2981,7 @@ export function funcionalidadesDaTecnologia(id: IdTecnologia): { tipo: TipoSoftw
 
 /** Pontos de investigação por minuto de quem está sem projeto. */
 export function rendimentoPesquisa(f: Trabalhador): number {
-  return competenciaMedia(f.competencias) * (0.5 + f.felicidade / 200) * PESQUISA.ritmo;
+  return competenciaMedia(f.competencias) * (0.5 + f.felicidade / 200) * PESQUISA.ritmo * RITMO_TRABALHO;
 }
 
 /** Previsão de pontos por mês, com quem está agora sem projeto (8 h por dia). */
@@ -2927,12 +3076,12 @@ export const ERAS: DefEra[] = [
     funcionalidades: { 'utilitario/comandos': 0.4, 'jogo/graficos3d': 0.9 } },
   { id: 'cloud', nome: 'Era Cloud', icone: '☁️', inicioMes: 84,
     descricao: 'Tudo na nuvem e sempre sincronizado. A segurança nunca foi tão importante.',
-    tipos: { editor: 1.15, antivirus: 1.2, utilitario: 0.95 },
+    tipos: { editor: 1.15, antivirus: 1.2, utilitario: 0.95, ia: 1.2 },
     tecnologias: { cloud: 2, servidores: 1.5, mobile: 1.3, criptografia: 1.5, seguranca: 1.3 },
     funcionalidades: { 'editor/nuvem': 1.8, 'utilitario/comandos': 0.3, 'antivirus/atualizacoes': 0.7 } },
   { id: 'ia', nome: 'Era IA', icone: '🤖', inicioMes: 120,
     descricao: 'A inteligência artificial muda tudo: quem não a usa fica para trás.',
-    tipos: { jogo: 1.1, editor: 1.1, utilitario: 0.9 },
+    tipos: { jogo: 1.1, editor: 1.1, utilitario: 0.9, ia: 1.8 },
     tecnologias: { ia: 2.2, iagenerativa: 2.5, dados: 1.5, cloud: 1.3, mobile: 1.2 },
     funcionalidades: { 'editor/corretor': 0.5, 'utilitario/comandos': 0.3, 'utilitario/agendamento': 0.7, 'editor/formatacao': 0.8 } },
 ];
@@ -2992,7 +3141,7 @@ function mudarDeEra(s: Estado): void {
   const nova = eraNoMes(mes);
   const antiga = eraNoMes(mes - 1);
   if (mes <= 0 || nova === antiga) return;
-  for (const p of s.produtos) p.vendasMes *= fatorEraNa(nova, p.tipo, p.funcionalidades) / fatorEraNa(antiga, p.tipo, p.funcionalidades);
+  for (const p of s.produtos) if (p.utilizadores === undefined) p.vendasMes *= fatorEraNa(nova, p.tipo, p.funcionalidades) / fatorEraNa(antiga, p.tipo, p.funcionalidades);
   const t = tendenciasEra(nova);
   mensagem(s, `${nova.icone} Começou a ${nova.nome}! ${nova.descricao}`
     + (t.sobe.length ? ` Em alta: ${t.sobe.join(', ')}.` : '') + (t.desce.length ? ` Em queda: ${t.desce.join(', ')}.` : ''), 'evento');
@@ -3129,6 +3278,7 @@ function diaPessoal(s: Estado): void {
     if (temTraco(f, 'sociavel') || temTraco(g, 'sociavel')) d += 1.5;
     if (temTraco(f, 'conflituoso') || temTraco(g, 'conflituoso')) d -= 3;
     if (f.felicidade < 30 || g.felicidade < 30) d -= 1;
+    d *= ESCALA_DIA;
     s.relacoes ??= [];
     let r = s.relacoes.find((o) => o.a === x && o.b === y);
     if (!r) { r = { a: x, b: y, valor: 0 }; s.relacoes.push(r); }
@@ -3176,13 +3326,14 @@ export interface DefEscritorio {
   altura: number;
   renda: number; // diferença na renda mensal
   custo: number; // custo da mudança
+  secretarias: number; // máximo de secretárias
 }
 
 export const ESCRITORIOS: DefEscritorio[] = [
-  { nome: 'Garagem', largura: 8, altura: 6, renda: -900, custo: 0 },
-  { nome: 'Loja', largura: 12, altura: 10, renda: -500, custo: 8000 },
-  { nome: 'Andar de escritórios', largura: 18, altura: 14, renda: 0, custo: 25000 },
-  { nome: 'Edifício próprio', largura: 24, altura: 18, renda: 1500, custo: 80000 },
+  { nome: 'Garagem', largura: 8, altura: 6, renda: -900, custo: 0, secretarias: 4 },
+  { nome: 'Loja', largura: 12, altura: 10, renda: -500, custo: 8000, secretarias: 10 },
+  { nome: 'Andar de escritórios', largura: 18, altura: 14, renda: 0, custo: 25000, secretarias: 24 },
+  { nome: 'Edifício próprio', largura: 24, altura: 18, renda: 1500, custo: 80000, secretarias: 48 },
 ];
 
 const FORA_DO_ESCRITORIO = 'Isso fica fora do teu escritório. Muda-te para um maior.';
@@ -3350,7 +3501,7 @@ export function irAFeira(s: Estado, id: string): Resultado {
   s.dinheiro -= f.custo;
   (s.feiras ??= {})[f.id] = anoDoJogo(s);
   for (const p of s.projetos) if (p.manutencao === undefined && !p.contrato) p.hype = Math.min(HYPE_MAXIMO, (p.hype ?? 0) + f.hype);
-  for (const p of s.produtos) p.vendasMes *= f.vendas;
+  for (const p of s.produtos) impulsionar(p, f.vendas);
   ganharXp(s, 30);
   mensagem(s, `${f.icone} Estiveste na ${f.nome}: mais expectativa para os projetos em curso e mais vendas.`, 'evento');
   return { ok: true };
@@ -3376,5 +3527,366 @@ function erroNosExtras(e: Obj): string | null {
     && Array.isArray(e.bolsa.historico) && e.bolsa.historico.every(numero)))
     return 'bolsa';
   if (e.feiras !== undefined && !(objeto(e.feiras) && Object.values(e.feiras).every(inteiro))) return 'feiras';
+  if (e.modo !== undefined && !(typeof e.modo === 'string' && (MODOS as readonly string[]).includes(e.modo))) return 'modo';
+  if (e.desafio !== undefined && !(objeto(e.desafio) && typeof e.desafio.id === 'string' && e.desafio.id in DESAFIOS
+    && ['curso', 'ganho', 'perdido'].includes(e.desafio.resultado as string)
+    && (e.desafio.mesFim === undefined || inteiro(e.desafio.mesFim)))) return 'desafio';
+  if (e.semFalencia !== undefined && typeof e.semFalencia !== 'boolean') return 'semFalencia';
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Modos de jogo: carreira, sandbox (dinheiro infinito) e desafios com prazo
+// ---------------------------------------------------------------------------
+
+export const MODOS = ['carreira', 'sandbox', 'desafio'] as const;
+export type Modo = (typeof MODOS)[number];
+export const SANDBOX_DINHEIRO = 100_000_000;
+
+export const NOMES_MODO: Record<Modo, { nome: string; descricao: string }> = {
+  carreira: { nome: 'Carreira', descricao: 'O jogo normal: cresce sem limite de tempo e não vás à falência.' },
+  sandbox: { nome: 'Sandbox', descricao: 'Dinheiro infinito e sem falência. Constrói e experimenta à vontade.' },
+  desafio: { nome: 'Desafio', descricao: 'Um objetivo com prazo. Cumpre-o antes do tempo acabar.' },
+};
+
+export type IdDesafio = 'milhao' | 'lider' | 'jogos' | 'edificio' | 'bolsa';
+export interface DefDesafio {
+  nome: string;
+  descricao: string;
+  anos: number; // prazo
+  escritorio?: number; // começa neste escritório (por omissão a garagem, como na carreira)
+  /** Progresso de 0 a 1 (1 = cumprido) e um texto curto. */
+  progresso: (s: Estado) => { valor: number; texto: string };
+}
+
+const JOGOS_BONS = 0.8;
+export const DESAFIOS: Record<IdDesafio, DefDesafio> = {
+  milhao: {
+    nome: 'O primeiro milhão', anos: 5,
+    descricao: 'Chega a 1 milhão de euros em caixa em 5 anos.',
+    progresso: (s) => ({ valor: Math.max(0, s.dinheiro) / 1_000_000, texto: `${euros(s.dinheiro)} de ${euros(1_000_000)}` }),
+  },
+  lider: {
+    nome: 'Número um', anos: 4,
+    descricao: 'Passa todos os concorrentes e fica em 1.º no ranking em 4 anos.',
+    progresso: (s) => { const p = posicaoNoRanking(s); return { valor: p === 1 ? 1 : 1 / p, texto: `${p}.º lugar` }; },
+  },
+  jogos: {
+    nome: 'Estúdio de culto', anos: 6,
+    descricao: 'Lança 5 jogos com qualidade de 80% ou mais em 6 anos.',
+    progresso: (s) => {
+      const n = s.produtos.filter((p) => p.tipo === 'jogo' && p.qualidade >= JOGOS_BONS).length;
+      return { valor: n / 5, texto: `${n} de 5 jogos` };
+    },
+  },
+  edificio: {
+    nome: 'Da garagem ao edifício', anos: 4,
+    descricao: 'Começa na garagem e muda-te para o edifício próprio em 4 anos.',
+    progresso: (s) => {
+      const i = s.escritorio ?? ESCRITORIOS.length - 1;
+      return { valor: i / (ESCRITORIOS.length - 1), texto: ESCRITORIOS[i]?.nome ?? 'Terreno todo' };
+    },
+  },
+  bolsa: {
+    nome: 'Entrada em bolsa', anos: 5,
+    descricao: 'Põe a empresa na bolsa em 5 anos.',
+    progresso: (s) => {
+      if (s.bolsa) return { valor: 1, texto: 'Na bolsa' };
+      const v = avaliarEmpresa(s).total;
+      return { valor: Math.min(0.99, Math.max(0, v) / BOLSA.valorMinimo), texto: `${euros(v)} de ${euros(BOLSA.valorMinimo)} de avaliação` };
+    },
+  },
+};
+
+/** Meses que faltam ao desafio (0 se já acabou ou não há desafio). */
+export function mesesDoDesafio(s: Estado): number {
+  if (!s.desafio) return 0;
+  return Math.max(0, DESAFIOS[s.desafio.id].anos * 12 - mesDeJogo(s));
+}
+
+function verificarDesafio(s: Estado): void {
+  const d = s.desafio;
+  if (!d || d.resultado !== 'curso') return;
+  const def = DESAFIOS[d.id];
+  if (def.progresso(s).valor >= 1) {
+    d.resultado = 'ganho';
+    d.mesFim = mesDeJogo(s);
+    mensagem(s, `🏆 Desafio cumprido: ${def.nome}! Conseguiste em ${textoMeses(d.mesFim)}.`, 'conquista');
+    ganharXp(s, 500);
+  } else if (mesDeJogo(s) >= def.anos * 12) {
+    d.resultado = 'perdido';
+    d.mesFim = mesDeJogo(s);
+    mensagem(s, `⌛ O prazo do desafio "${def.nome}" acabou. Podes continuar a jogar em modo livre.`, 'aviso');
+  }
+}
+
+export function textoMeses(m: number): string {
+  const a = Math.floor(m / 12), r = m % 12;
+  return [a ? `${a} ano${a > 1 ? 's' : ''}` : '', r ? `${r} ${r > 1 ? 'meses' : 'mês'}` : ''].filter(Boolean).join(' e ') || 'menos de um mês';
+}
+
+// ---------------------------------------------------------------------------
+// Plataforma: o produto único da empresa. Em vez de vender cópias que caem todos os meses, tem utilizadores
+// ativos, planos de preços, servidores que podem ficar sobrecarregados e updates com funcionalidades novas.
+// ---------------------------------------------------------------------------
+
+export const PLATAFORMA = {
+  precoReferencia: 6, // € por mês que o utilizador médio aceita pagar
+  conversaoGratis: 0.05, // fração de utilizadores grátis que passa a pagar (com preço de referência)
+  multGratis: 4, // um plano grátis traz 4× mais gente
+  receitaAnuncio: 0.25, // € por mês por utilizador grátis com anúncios
+  crescimento: 0.06, // fração do caminho até ao potencial que se percorre por dia
+  abandono: 0.04, // idem, quando há utilizadores a mais
+  inicial: 0.25, // fração do potencial que chega no dia do lançamento
+  passaPalavra: 0.05, // +5% de potencial por mês de vida (até ao triplo)
+  semUpdateMeses: 3, // a partir daqui a satisfação desce por falta de novidades
+  quedaAvaliacao: 0.98, // os investidores contam com uma plataforma que dura
+} as const;
+
+export interface DefServidor { nome: string; capacidade: number; custo: number }
+/** Servidores: quantos utilizadores aguentam e quanto custam por mês. Mudar custa 2 meses do novo. */
+export const SERVIDORES: DefServidor[] = [
+  { nome: 'Servidor partilhado', capacidade: 2_000, custo: 60 },
+  { nome: 'Servidor virtual (VPS)', capacidade: 10_000, custo: 300 },
+  { nome: 'Servidor dedicado', capacidade: 50_000, custo: 1_200 },
+  { nome: 'Cluster na cloud', capacidade: 250_000, custo: 5_000 },
+  { nome: 'Data centers próprios', capacidade: 1_500_000, custo: 22_000 },
+  { nome: 'Rede global', capacidade: 10_000_000, custo: 90_000 },
+];
+
+/** Índice da plataforma em s.produtos (undefined se ainda não foi lançada). */
+export function plataformaDe(s: Estado): number | undefined {
+  const i = s.produtos.findIndex((p) => p.utilizadores !== undefined);
+  return i < 0 ? undefined : i;
+}
+
+/** O projeto que vai dar origem à plataforma (não é patch, update, contrato nem sequela). */
+export function eProdutoNovo(p: Projeto): boolean {
+  return !p.contrato && p.manutencao === undefined && p.update === undefined && !p.sequela;
+}
+
+export function capacidadeServidor(s: Estado, nivel: number): number {
+  return Math.round(SERVIDORES[nivel].capacidade * (temTecnologia(s, 'cloud') ? 1.25 : 1));
+}
+
+/** Carga dos servidores (1 = cheios). */
+export function cargaServidor(s: Estado, p: Produto): number {
+  return (p.utilizadores ?? 0) / capacidadeServidor(s, p.servidor ?? 0);
+}
+
+/** Quanto o preço afasta as pessoas (1 = preço de referência ou grátis). */
+function fatorPreco(preco: number): number {
+  return Math.exp(-(preco - PLATAFORMA.precoReferencia) / (PLATAFORMA.precoReferencia * 1.5));
+}
+
+/** Utilizadores que a plataforma consegue atrair com o que tem agora. */
+export function potencialUtilizadores(s: Estado, p: Produto): number {
+  const plano = p.plano ?? { gratis: false, preco: PLATAFORMA.precoReferencia, anuncios: false };
+  const base = vendasIniciais(p.tipo, p.funcionalidades, p.qualidade, fatorMercado(s, p.tipo))
+    * fatorEra(s, p.tipo, p.funcionalidades) / PLATAFORMA.precoReferencia;
+  const meses = Math.max(0, (s.minuto - p.lancadoEm) / MIN_POR_MES);
+  const palavra = Math.min(3, 1 + meses * PLATAFORMA.passaPalavra);
+  const satisfacao = 0.4 + (p.satisfacao ?? 70) / 100;
+  const pago = plano.preco > 0 ? fatorPreco(plano.preco) : 1;
+  const acesso = plano.gratis ? PLATAFORMA.multGratis : Math.min(1.5, pago);
+  return base * palavra * satisfacao * acesso * (temMelhoria(s, 'marketing') ? 1.15 : 1);
+}
+
+/** Quantos dos utilizadores pagam, com o plano atual. */
+export function pagantesDe(p: Produto): number {
+  const u = p.utilizadores ?? 0;
+  const plano = p.plano;
+  if (!plano || plano.preco <= 0) return 0;
+  if (!plano.gratis) return u;
+  return u * Math.min(0.5, PLATAFORMA.conversaoGratis * fatorPreco(plano.preco) * ((p.satisfacao ?? 70) / 70));
+}
+
+/** Receita prevista por mês, com os utilizadores e o plano de agora. */
+export function receitaMensal(p: Produto): number {
+  const u = p.utilizadores ?? 0;
+  const pag = pagantesDe(p);
+  const anuncios = p.plano?.gratis && p.plano.anuncios ? (u - pag) * PLATAFORMA.receitaAnuncio : 0;
+  return pag * (p.plano?.preco ?? 0) + anuncios;
+}
+
+/** Lucro por mês da plataforma: receitas menos servidores. */
+export function lucroMensal(s: Estado, p: Produto): number {
+  return receitaMensal(p) - SERVIDORES[p.servidor ?? 0].custo + 0 * s.minuto;
+}
+
+/** Satisfação para onde os utilizadores tendem, dado o estado da plataforma. */
+export function satisfacaoAlvo(s: Estado, p: Produto): number {
+  const plano = p.plano;
+  let alvo = 40 + p.qualidade * 50 - Math.min(35, (p.bugs ?? 0) / 2);
+  if (plano?.gratis && plano.anuncios) alvo -= 8;
+  if (plano && plano.preco > 0) alvo -= Math.max(0, (plano.preco - PLATAFORMA.precoReferencia) * 1.5);
+  const semUpdate = (s.minuto - (p.ultimoUpdate ?? p.lancadoEm)) / MIN_POR_MES;
+  alvo -= Math.max(0, semUpdate - PLATAFORMA.semUpdateMeses) * 4;
+  if (cargaServidor(s, p) > 1) alvo -= 30;
+  return Math.max(0, Math.min(100, alvo));
+}
+
+function iniciarPlataforma(s: Estado, p: Produto, hype: number, marketing: number): void {
+  p.plano = { gratis: false, preco: PLATAFORMA.precoReferencia, anuncios: false };
+  p.servidor = 0;
+  p.satisfacao = 70;
+  p.ultimoUpdate = s.minuto;
+  p.updates = 0;
+  p.receitaMes = 0;
+  p.custoMes = 0;
+  p.quedasMes = 0;
+  p.historicoUtilizadores = [];
+  p.utilizadores = Math.round(potencialUtilizadores(s, p) * PLATAFORMA.inicial * (1 + hype) * marketing);
+  p.pagantes = Math.round(pagantesDe(p));
+  p.vendasMes = receitaMensal(p);
+}
+
+/** Um dia de vida da plataforma: utilizadores entram e saem, pagam, os servidores aguentam (ou não). */
+function diaDaPlataforma(s: Estado, p: Produto): void {
+  const pot = potencialUtilizadores(s, p);
+  const u = p.utilizadores ?? 0;
+  // Com os servidores cheios ninguém novo consegue entrar.
+  const cheio = cargaServidor(s, p) > 1;
+  const passo = pot > u ? (cheio ? 0 : PLATAFORMA.crescimento) : PLATAFORMA.abandono;
+  p.utilizadores = Math.max(0, u + (pot - u) * passo);
+  const carga = cargaServidor(s, p);
+  if (carga > 1) {
+    // Sobrecarga: o serviço cai, há quem desista logo.
+    p.utilizadores *= 1 - Math.min(0.08, (carga - 1) * 0.05 + 0.01);
+    p.quedasMes = (p.quedasMes ?? 0) + 1;
+    if (p.quedasMes === 1)
+      mensagem(s, `🔥 Os servidores de «${p.nome}» estão sobrecarregados (${Math.round(carga * 100)}%): o serviço vai abaixo e os utilizadores fogem. Faz upgrade no separador Produtos!`, 'aviso');
+  } else if (carga > 0.85 && !p.avisoCarga) {
+    p.avisoCarga = true;
+    mensagem(s, `⚠️ Os servidores de «${p.nome}» estão a ${Math.round(carga * 100)}% da capacidade. Pensa num upgrade.`, 'aviso');
+  } else if (carga < 0.7) p.avisoCarga = false;
+  const alvo = satisfacaoAlvo(s, p);
+  p.satisfacao = (p.satisfacao ?? 70) + (alvo - (p.satisfacao ?? 70)) * 0.15;
+  p.pagantes = Math.round(pagantesDe(p));
+  p.receitaMes = (p.receitaMes ?? 0) + receitaMensal(p) / DIAS_POR_MES;
+  p.custoMes = (p.custoMes ?? 0) + SERVIDORES[p.servidor ?? 0].custo / DIAS_POR_MES;
+  p.vendasMes = receitaMensal(p);
+}
+
+/** Eventos e feiras que mexem nas vendas: na plataforma mexem nos utilizadores. */
+function impulsionar(p: Produto, fator: number): void {
+  if (p.utilizadores !== undefined) p.utilizadores *= fator;
+  else p.vendasMes *= fator;
+}
+
+/** Muda o plano de preços. */
+export function definirPlano(s: Estado, indice: number, plano: PlanoProduto): Resultado {
+  const p = s.produtos[indice];
+  if (!p || p.utilizadores === undefined) return { ok: false, msg: 'Esse produto não tem planos.' };
+  const preco = Math.round(plano.preco * 100) / 100;
+  if (!Number.isFinite(preco) || preco < 0 || preco > 500) return { ok: false, msg: 'O preço tem de estar entre 0 € e 500 €.' };
+  if (!plano.gratis && preco === 0) return { ok: false, msg: 'Sem plano grátis, tem de haver um preço.' };
+  p.plano = { gratis: plano.gratis, preco, anuncios: plano.gratis && plano.anuncios };
+  p.pagantes = Math.round(pagantesDe(p));
+  p.vendasMes = receitaMensal(p);
+  return { ok: true };
+}
+
+/** Muda de servidor (para cima ou para baixo). Subir custa 2 meses do servidor novo. */
+export function mudarServidor(s: Estado, indice: number, nivel: number): Resultado {
+  const p = s.produtos[indice];
+  if (!p || p.utilizadores === undefined) return { ok: false, msg: 'Esse produto não tem servidores.' };
+  if (!Number.isInteger(nivel) || !SERVIDORES[nivel]) return { ok: false, msg: 'Servidor desconhecido.' };
+  if (nivel === (p.servidor ?? 0)) return { ok: false, msg: 'Já usas esse servidor.' };
+  const custo = nivel > (p.servidor ?? 0) ? SERVIDORES[nivel].custo * 2 : 0;
+  if (s.dinheiro < custo) return { ok: false, msg: `Dinheiro insuficiente (custa ${euros(custo)}).` };
+  s.dinheiro -= custo;
+  p.servidor = nivel;
+  p.avisoCarga = false;
+  mensagem(s, `🖥️ «${p.nome}» passou para ${SERVIDORES[nivel].nome.toLowerCase()} (aguenta ${capacidadeServidor(s, nivel).toLocaleString('pt-PT')} utilizadores).`);
+  return { ok: true };
+}
+
+/** Campanha de marketing feita à plataforma já lançada: traz utilizadores (cada uma, uma vez por mês). */
+export function campanhaPlataforma(s: Estado, indice: number, id: IdCampanha): Resultado {
+  const p = s.produtos[indice];
+  const c = CAMPANHAS[id];
+  if (!p || p.utilizadores === undefined) return { ok: false, msg: 'Produto desconhecido.' };
+  if (!c) return { ok: false, msg: 'Campanha desconhecida.' };
+  if (nivelDaEmpresa(s) < c.nivel) return { ok: false, msg: `Precisa do nível ${c.nivel}.` };
+  const mes = mesDeJogo(s);
+  if (p.campanhasMes?.[id] === mes) return { ok: false, msg: 'Essa campanha já foi feita este mês.' };
+  if (s.dinheiro < c.custo) return { ok: false, msg: `Precisas de ${euros(c.custo)}.` };
+  s.dinheiro -= c.custo;
+  (p.campanhasMes ??= {})[id] = mes;
+  const novos = Math.round(potencialUtilizadores(s, p) * c.hype * 0.6 * (temTecnologia(s, 'dados') ? 1.1 : 1));
+  p.utilizadores += novos;
+  mensagem(s, `${c.icone} Campanha «${c.nome}» para «${p.nome}»: +${novos.toLocaleString('pt-PT')} utilizadores.`);
+  return { ok: true };
+}
+
+/** Funcionalidades que um update ainda pode acrescentar à plataforma. */
+export function funcionalidadesParaUpdate(s: Estado, indice: number): string[] {
+  const p = s.produtos[indice];
+  if (!p) return [];
+  return TIPOS[p.tipo].funcionalidades.filter((f) => !p.funcionalidades.includes(f.id) && funcionalidadeDisponivel(s, p.tipo, f.id)).map((f) => f.id);
+}
+
+export function updateDe(s: Estado, indice: number): Projeto | undefined {
+  return s.projetos.find((p) => p.update === indice);
+}
+
+/** Começa um update com funcionalidades novas (ou só melhorias, se a lista estiver vazia). */
+export function iniciarUpdate(s: Estado, indice: number, novas: string[], equipa: number[] = semProjeto(s).map((f) => f.id)): Resultado {
+  const p = s.produtos[indice];
+  if (!p || p.utilizadores === undefined) return { ok: false, msg: 'Produto desconhecido.' };
+  if (updateDe(s, indice)) return { ok: false, msg: `Já há um update em curso para «${p.nome}».` };
+  if (equipa.some((id) => !s.funcionarios.some((f) => f.id === id))) return { ok: false, msg: 'Funcionário desconhecido.' };
+  const lista = [...new Set(novas)];
+  if (lista.some((f) => p.funcionalidades.includes(f))) return { ok: false, msg: 'Essa funcionalidade já existe.' };
+  const v = validarFuncionalidades(p.tipo, [...p.funcionalidades, ...lista]);
+  if (!v.ok) return v;
+  const bloqueada = lista.find((f) => !funcionalidadeDisponivel(s, p.tipo, f));
+  if (bloqueada) return { ok: false, msg: 'Essa funcionalidade precisa de uma tecnologia que ainda não tens.' };
+  const id = s.proximoId++;
+  const trabalho = Math.max(3000, trabalhoDoProjeto(p.tipo, [...p.funcionalidades, ...lista]) - trabalhoDoProjeto(p.tipo, p.funcionalidades) + 2000);
+  s.projetos.push({
+    id,
+    nome: `Update ${1}.${(p.updates ?? 0) + 1} · ${p.nome}`,
+    tipo: p.tipo,
+    funcionalidades: lista,
+    trabalhoFeito: 0,
+    trabalhoTotal: trabalho,
+    feito: { programacao: 0, design: 0, testes: 0 },
+    somaQualidade: { programacao: 0, design: 0, testes: 0 },
+    update: indice,
+  });
+  for (const fid of equipa) definirEquipa(s, fid, id);
+  mensagem(s, `🚀 Começou um update para «${p.nome}»` + (lista.length ? ` com ${lista.length} funcionalidade${lista.length === 1 ? '' : 's'} nova${lista.length === 1 ? '' : 's'}.` : ' (melhorias e polimento).'));
+  return { ok: true };
+}
+
+function concluirUpdate(s: Estado, proj: Projeto): void {
+  const p = s.produtos[proj.update!];
+  s.projetos = s.projetos.filter((o) => o !== proj);
+  for (const f of membrosDe(s, proj.id)) f.projetoId = null;
+  if (!p) return;
+  const q = Math.min(1, qualidadeDoProjeto(proj) + bonusQualidade(s));
+  // A qualidade aproxima-se da do update (um update melhor puxa para cima; um pior puxa um pouco para baixo).
+  p.qualidade = Math.min(1, Math.max(0, p.qualidade + (q - p.qualidade) * (q > p.qualidade ? 0.5 : 0.25)));
+  p.funcionalidades = [...p.funcionalidades, ...proj.funcionalidades];
+  p.updates = (p.updates ?? 0) + 1;
+  p.ultimoUpdate = s.minuto;
+  p.satisfacao = Math.min(100, (p.satisfacao ?? 70) + 8);
+  p.bugs = Math.round((p.bugs ?? 0) + bugsDoLancamento(s, proj) * BUGS.noLancamento * 0.5);
+  p.utilizadores = (p.utilizadores ?? 0) * 1.05;
+  mensagem(s, `🚀 Update 1.${p.updates} de «${p.nome}» publicado! Qualidade ${Math.round(p.qualidade * 100)}%`
+    + (proj.funcionalidades.length ? `, ${proj.funcionalidades.length} funcionalidade(s) nova(s).` : '.') + ' A equipa está livre.', 'lancamento');
+  ganharXp(s, 20 + proj.funcionalidades.length * 5);
+  verificarConquistas(s);
+}
+
+/** Valida os campos da plataforma num save. */
+function erroNaPlataforma(p: Record<string, unknown>): string | null {
+  if (p.utilizadores === undefined) return null;
+  if (!numero(p.utilizadores) || (p.utilizadores as number) < 0) return 'utilizadores do produto';
+  if (!objeto(p.plano) || typeof p.plano.gratis !== 'boolean' || !numero(p.plano.preco) || typeof p.plano.anuncios !== 'boolean') return 'plano do produto';
+  if (!inteiro(p.servidor) || !SERVIDORES[p.servidor as number]) return 'servidor do produto';
+  if (!numero(p.satisfacao)) return 'satisfação do produto';
   return null;
 }

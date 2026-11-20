@@ -1,7 +1,8 @@
 // Menus em ecrã inteiro: principal, nova empresa, pausa, definições, como jogar e conquistas.
-import { CONQUISTAS, DIFICULDADES, DECORACAO, ECON, euros, OBJETOS, LISTA_OBJETOS, type Dificuldade, type OpcoesJogo } from './sim.ts';
+import { CONQUISTAS, DIFICULDADES, DECORACAO, ECON, euros, OBJETOS, LISTA_OBJETOS, type Dificuldade, type OpcoesJogo,
+  DESAFIOS, NOMES_MODO, MODOS, type Modo, type IdDesafio } from './sim.ts';
 import { LIMITES_FPS, type Definicoes, type Qualidade } from './definicoes.ts';
-import { ic } from './icones.ts';
+import { ic, type NomeIcone } from './icones.ts';
 
 export type Ecra = 'principal' | 'novo' | 'pausa' | 'definicoes' | 'ajuda' | 'conquistas';
 
@@ -36,6 +37,8 @@ export class Menus {
   ecra: Ecra | null = null;
   private origem: 'principal' | 'pausa' = 'principal';
   private dificuldade: Dificuldade = 'normal';
+  private modo: Modo = 'carreira';
+  private desafio: IdDesafio = 'milhao';
   private readonly acoes: AcoesMenu;
 
   constructor(acoes: AcoesMenu) {
@@ -69,7 +72,14 @@ export class Menus {
   private fundar(): void {
     const nome = (this.raiz.querySelector('#m-nome') as HTMLInputElement | null)?.value ?? '';
     const eventos = (this.raiz.querySelector('#m-eventos') as HTMLInputElement | null)?.checked ?? true;
-    this.acoes.fundar({ nome, dificuldade: this.dificuldade, eventos });
+    const opcoes: OpcoesJogo = { nome, dificuldade: this.dificuldade, eventos, modo: this.modo };
+    if (this.modo === 'desafio') opcoes.desafio = this.desafio;
+    if (this.modo === 'carreira') {
+      const din = Number((this.raiz.querySelector('#m-dinheiro') as HTMLInputElement | null)?.value);
+      if (Number.isFinite(din) && din > 0 && din !== DIFICULDADES[this.dificuldade].dinheiro) opcoes.dinheiroInicial = din;
+      if ((this.raiz.querySelector('#m-semfalencia') as HTMLInputElement | null)?.checked) opcoes.semFalencia = true;
+    }
+    this.acoes.fundar(opcoes);
   }
 
   private clicar(ev: MouseEvent): void {
@@ -80,6 +90,15 @@ export class Menus {
     if (b.dataset.dif) {
       this.dificuldade = b.dataset.dif as Dificuldade;
       this.raiz.querySelectorAll('[data-dif]').forEach((o) => o.classList.toggle('ativo', o === b));
+      const din = this.raiz.querySelector('#m-dinheiro') as HTMLInputElement | null;
+      if (din) din.value = String(DIFICULDADES[this.dificuldade].dinheiro);
+    } else if (b.dataset.modo || b.dataset.desafio) {
+      if (b.dataset.modo) this.modo = b.dataset.modo as Modo;
+      if (b.dataset.desafio) this.desafio = b.dataset.desafio as IdDesafio;
+      const nome = (this.raiz.querySelector('#m-nome') as HTMLInputElement | null)?.value ?? '';
+      this.mostrar('novo');
+      const n = this.raiz.querySelector('#m-nome') as HTMLInputElement | null;
+      if (n) n.value = nome;
     } else if (b.dataset.qual) {
       this.acoes.mudarDefinicoes({ ...this.acoes.definicoes(), qualidade: b.dataset.qual as Qualidade });
       this.raiz.querySelectorAll('[data-qual]').forEach((o) => o.classList.toggle('ativo', o === b));
@@ -144,11 +163,29 @@ export class Menus {
       <button data-dif="${d}" class="dif ${d === this.dificuldade ? 'ativo' : ''}">
         <span class="ic">${ICONE_DIF[d]}</span><b>${DIFICULDADES[d].nome}</b><small>${DIFICULDADES[d].descricao}</small>
       </button>`).join('');
+    const modos = MODOS.map((m) => `
+      <button data-modo="${m}" class="dif ${m === this.modo ? 'ativo' : ''}">
+        <span class="ic">${ic(ICONE_MODO[m])}</span><b>${NOMES_MODO[m].nome}</b><small>${NOMES_MODO[m].descricao}</small>
+      </button>`).join('');
+    const desafios = (Object.keys(DESAFIOS) as IdDesafio[]).map((d) => `
+      <button data-desafio="${d}" class="dif ${d === this.desafio ? 'ativo' : ''}">
+        <b>${DESAFIOS[d].nome}</b><small>${DESAFIOS[d].descricao}</small>
+      </button>`).join('');
+    const extra = this.modo === 'sandbox' ? ''
+      : this.modo === 'desafio' ? `<div class="rotulo">Desafio</div><div class="dificuldades">${desafios}</div>`
+      : `<div class="linha-personalizada">
+          <label class="campo"><span>Dinheiro inicial (€)</span><input id="m-dinheiro" type="number" min="1000" max="10000000" step="1000" value="${DIFICULDADES[this.dificuldade].dinheiro}"></label>
+          <label class="interruptor"><input type="checkbox" id="m-semfalencia"><i></i>
+            <span><b>Sem falência</b><small>A empresa pode ficar com dívidas sem fechar.</small></span></label>
+        </div>`;
     return `<div class="janela">
       <h2>Nova empresa</h2>
       <label class="campo"><span>Nome da empresa</span><input id="m-nome" type="text" maxlength="30" placeholder="Software Lda." autocomplete="off"></label>
-      <div class="rotulo">Dificuldade</div>
-      <div class="dificuldades">${difs}</div>
+      <div class="rotulo">Modo de jogo</div>
+      <div class="dificuldades">${modos}</div>
+      ${this.modo === 'sandbox' ? '' : `<div class="rotulo">Dificuldade</div>
+      <div class="dificuldades">${difs}</div>`}
+      ${extra}
       <label class="interruptor"><input type="checkbox" id="m-eventos" checked><i></i>
         <span><b>Eventos aleatórios</b><small>Notícias, avarias, prémios e investidores no fecho do mês.</small></span></label>
       <div class="linha-botoes"><button data-m="voltar">Voltar</button><button data-m="fundar" class="primario">${ic('rocket')} Fundar empresa</button></div>
@@ -225,7 +262,7 @@ export class Menus {
       </div>
       <h3 class="titulo-atalhos">Atalhos</h3>
       <div class="atalhos">
-        <span><kbd>1</kbd>–<kbd>6</kbd> ferramentas</span><span><kbd>Espaço</kbd> pausa</span><span><kbd>Esc</kbd> menu / cancelar</span>
+        <span><kbd>1</kbd>–<kbd>7</kbd> ferramentas</span><span><kbd>R</kbd> rodar mobília</span><span><kbd>Espaço</kbd> pausa</span><span><kbd>Esc</kbd> menu / cancelar</span>
         <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> mover a câmara</span><span><kbd>Q</kbd><kbd>E</kbd> rodar</span>
         <span>Botão direito: rodar · meio: arrastar · roda: zoom</span><span><kbd>Ctrl</kbd>+<kbd>S</kbd> guardar</span><span><kbd>M</kbd> melhorias</span>
       </div>
@@ -245,3 +282,5 @@ export class Menus {
     </div>`;
   }
 }
+
+const ICONE_MODO: Record<Modo, NomeIcone> = { carreira: 'briefcase', sandbox: 'sparkles', desafio: 'target' };
