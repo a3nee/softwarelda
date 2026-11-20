@@ -6,6 +6,7 @@ import { Tree } from '@dgreenheck/ez-tree';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { hash, mat } from './modelos.ts';
 import { M, materialPBR, R, texturaNoMundo } from './recursos.ts';
+import { Pessoa } from './pessoas.ts';
 import type { Qualidade } from './definicoes.ts';
 
 const HORA_FIXA = 13; // sem ciclo dia/noite
@@ -24,6 +25,21 @@ const MEIA_RUA_PASSEIO = 3.4; // meia largura do asfalto + passeio
 
 export type EstadoCasa = 'tua' | 'arrendada' | 'morada';
 
+/** Toldo às riscas brancas e da cor da loja. */
+function toldoMaterial(cor: string): THREE.MeshStandardMaterial {
+  const c = document.createElement('canvas');
+  c.width = 64;
+  c.height = 8;
+  const g = c.getContext('2d')!;
+  for (let i = 0; i < 8; i++) {
+    g.fillStyle = i % 2 ? '#f7f6f2' : cor;
+    g.fillRect(i * 8, 0, 8, 8);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.8 });
+}
+
 /** Material de placa com texto branco sobre a cor dada (dos dois lados). */
 function placaMaterial(texto: string, cor: string): THREE.MeshStandardMaterial {
   const c = document.createElement('canvas');
@@ -35,7 +51,8 @@ function placaMaterial(texto: string, cor: string): THREE.MeshStandardMaterial {
   g.fillStyle = cor;
   g.fillRect(8, 8, 240, 128);
   g.fillStyle = '#ffffff';
-  g.font = 'bold 40px Inter, sans-serif';
+  let px = 40;
+  do g.font = `bold ${px}px Inter, sans-serif`; while (g.measureText(texto).width > 224 && --px > 12);
   g.textAlign = 'center';
   g.textBaseline = 'middle';
   g.fillText(texto, 128, 74);
@@ -198,6 +215,8 @@ export class Ambiente {
     this.criarEstrada(altura, entrada);
     this.criarArvores(altura);
     this.criarBairro();
+    this.criarComercio();
+    this.criarParque(altura);
     this.plantarArvoresSoltas(largura, altura);
     this.criarCidade();
     this.criarEstacionamento();
@@ -517,6 +536,199 @@ export class Ambiente {
   private readonly carrosLote: (THREE.Object3D | null)[] = [];
   /** Retângulos dos edifícios (casas e prédios), onde não se pode andar nem conduzir. */
   readonly obstaculos: { x0: number; x1: number; z0: number; z1: number }[] = [];
+
+  /** Peões a passear pelos passeios e pelo parque (andam em circuito, num retângulo). */
+  private readonly peoes: { p: Pessoa; pontos: THREE.Vector3[]; seg: number; f: number; vel: number }[] = [];
+
+  private criarPeoes(circuitos: THREE.Vector3[][]): void {
+    if (!R.pessoas.length) return;
+    circuitos.forEach((pontos, k) => {
+      const p = new Pessoa(5000 + k * 13, k % 2 ? 'Ana Peão' : 'Rui Peão');
+      p.indicador.visible = false;
+      this.cena.add(p.grupo);
+      const seg = Math.floor(hash(k + 77) * pontos.length);
+      this.peoes.push({ p, pontos, seg, f: hash(k + 78), vel: (1.1 + hash(k + 79) * 0.5) * M });
+    });
+  }
+
+  private avancarPeoes(dt: number): void {
+    for (const w of this.peoes) {
+      const a = w.pontos[w.seg];
+      const b = w.pontos[(w.seg + 1) % w.pontos.length];
+      const comp = a.distanceTo(b);
+      w.f += (w.vel * dt) / comp;
+      if (w.f >= 1) {
+        w.f -= 1;
+        w.seg = (w.seg + 1) % w.pontos.length;
+      }
+      const g = w.p.grupo;
+      g.position.lerpVectors(a, b, Math.min(1, w.f));
+      g.rotation.y = Math.atan2(b.x - a.x, b.z - a.z);
+      w.p.atualizar(dt, 'andar', w.vel, false);
+    }
+  }
+
+  /**
+   * Rua do comércio: do outro lado da rua transversal, uma fila de lojas viradas para o escritório,
+   * com letreiros, toldos às riscas e uma esplanada à porta do café.
+   */
+  private criarComercio(): void {
+    const LOJAS: [string, string, number][] = [
+      ['Café Central', '#7a4b2e', 0xf3d9b1], ['Padaria Aurora', '#b45309', 0xfff0d6], ['Farmácia', '#2f9e5b', 0xe8f3ec],
+      ['Mercearia', '#8a2f2f', 0xf6e3c0], ['Livraria', '#2f5d8a', 0xdbe9f2], ['Pizzaria Bella', '#c0161d', 0xf3d2c9],
+      ['Barbearia', '#17181c', 0xe8ddf3], ['Ginásio Atlas', '#e07a2f', 0xe2efd3], ['Banco do Minho', '#1f3a6e', 0xf7f1e8],
+      ['Loja de Informática', '#7a4fd1', 0xdbe9f2],
+    ];
+    const frente = RUA_T_Z - MEIA_RUA_PASSEIO - 2.0; // fachada (virada para +z)
+    const x0 = RUA_X + MEIA_RUA_PASSEIO + 1.2;
+    const x1 = this.ruaBairro - MEIA_RUA_PASSEIO - 1.2;
+    const vidro = new THREE.MeshStandardMaterial({ color: 0x24384d, metalness: 0.6, roughness: 0.12, emissive: 0xffd8a0, emissiveIntensity: 0 });
+    this.matLuzes.push(vidro);
+    const branco = mat(0xf7f6f2, { roughness: 0.6 });
+    const cimento = texturaNoMundo(materialPBR('pavement_04', 1), 0.54, 0.2);
+    // Passeio largo à frente das lojas
+    const passeio = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0 + 2, 0.1, frente - (RUA_T_Z - MEIA_RUA_PASSEIO) - 0.02 > 0 ? 0.1 : (RUA_T_Z - MEIA_RUA_PASSEIO) - frente), cimento);
+    passeio.position.set((x0 + x1) / 2, -0.07, (frente + RUA_T_Z - MEIA_RUA_PASSEIO) / 2);
+    passeio.receiveShadow = true;
+    this.cena.add(passeio);
+    let x = x0;
+    let i = 0;
+    while (x < x1 - 4) {
+      const [nome, cor, parede] = LOJAS[i % LOJAS.length];
+      const w = Math.min(x1 - x, 5.2 + hash(i + 900) * 2.2);
+      const d = 6;
+      const h = (hash(i + 901) < 0.5 ? 2 : 3) * 1.7 + 0.3;
+      const cx = x + w / 2;
+      const corpo = new THREE.Mesh(uvEmMetros(new THREE.BoxGeometry(w - 0.15, h, d), w, h, d, 3),
+        materialPBR('painted_plaster_wall', 1, { color: parede }));
+      corpo.position.set(cx, h / 2 - 0.12, frente - d / 2);
+      corpo.castShadow = corpo.receiveShadow = true;
+      this.cena.add(corpo);
+      this.obstaculo(corpo);
+      // Montra e porta no rés-do-chão
+      const montra = new THREE.Mesh(new THREE.BoxGeometry(w * 0.62, 1.1, 0.05), vidro);
+      montra.position.set(cx - w * 0.12, 0.62, frente + 0.03);
+      this.cena.add(montra);
+      const porta = new THREE.Mesh(new THREE.BoxGeometry(0.62, 1.2, 0.05), mat(0x3b2a1e, { roughness: 0.6 }));
+      porta.position.set(cx + w * 0.33, 0.5, frente + 0.03);
+      this.cena.add(porta);
+      // Janelas nos andares de cima
+      for (let y = 2.55; y < h - 0.5; y += 1.7)
+        for (let k = -1; k <= 1; k += 2) {
+          const jan = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.65, 0.05), vidro);
+          jan.position.set(cx + k * w * 0.22, y, frente + 0.03);
+          this.cena.add(jan);
+        }
+      // Letreiro com o nome
+      const letreiro = new THREE.Mesh(new THREE.PlaneGeometry(Math.min(w - 0.5, 3.6), 0.48), placaMaterial(nome.toUpperCase(), cor));
+      letreiro.position.set(cx, 1.78, frente + 0.06);
+      letreiro.userData.letreiro = true; // (não se funde: cada um tem a sua textura)
+      this.cena.add(letreiro);
+      // Toldo às riscas por cima da montra
+      const toldo = new THREE.Mesh(new THREE.BoxGeometry(w * 0.7, 0.04, 0.9), toldoMaterial(cor));
+      toldo.position.set(cx - w * 0.12, 1.25, frente + 0.42);
+      toldo.rotation.x = 0.35;
+      toldo.castShadow = true;
+      toldo.userData.toldo = true;
+      this.cena.add(toldo);
+      // Esplanada à porta do café e da pizzaria
+      if (/Café|Pizzaria/.test(nome))
+        for (let k = 0; k < 2; k++) this.mesaEsplanada(cx - w * 0.3 + k * 1.4, frente + 1.2, cor, branco);
+      x += w;
+      i++;
+    }
+    this.ocupado.push({ x0: x0 - 1, x1: x1 + 1, z0: frente - 7, z1: RUA_T_Z - MEIA_RUA_PASSEIO, relva: false });
+  }
+
+  private mesaEsplanada(x: number, z: number, cor: string, branco: THREE.Material): void {
+    const g = new THREE.Group();
+    const pe = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.05, 0.42, 8), branco);
+    pe.position.y = 0.09;
+    const tampo = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.03, 16), branco);
+    tampo.position.y = 0.3;
+    const haste = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 1.1, 6), branco);
+    haste.position.y = 0.75;
+    const guarda = new THREE.Mesh(new THREE.ConeGeometry(0.75, 0.32, 12, 1, true), mat(new THREE.Color(cor).getHex(), { roughness: 0.8, side: THREE.DoubleSide }));
+    guarda.position.y = 1.2;
+    g.add(pe, tampo, haste, guarda);
+    for (const a of [0, Math.PI]) {
+      const cad = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.2, 0.22), mat(0x2b2d31, { roughness: 0.7 }));
+      cad.position.set(Math.sin(a) * 0.45, 0.0, Math.cos(a) * 0.45);
+      g.add(cad);
+    }
+    g.position.set(x, -0.12, z);
+    g.traverse((o) => { if ((o as THREE.Mesh).isMesh) o.castShadow = true; });
+    this.cena.add(g);
+  }
+
+  /** Parque a sul do escritório: relvado com lago, caminhos, bancos, candeeiros e árvores. */
+  private criarParque(altura: number): void {
+    const x0 = 0.5, x1 = this.ruaBairro - MEIA_RUA_PASSEIO - 17, z0 = altura + 6, z1 = altura + 38;
+    const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
+    this.ocupado.push({ x0, x1, z0, z1, relva: true });
+    const caminho = texturaNoMundo(materialPBR('concrete_wall_006', 1, { color: 0xd8cfbf }), 0.5, 0.2);
+    // Caminhos em cruz e à volta do lago
+    const tira = (ax: number, az: number, bx: number, bz: number, larg: number) => {
+      const comp = Math.hypot(bx - ax, bz - az);
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(larg, comp).rotateX(-Math.PI / 2), caminho);
+      m.position.set((ax + bx) / 2, -0.112, (az + bz) / 2);
+      m.rotation.y = Math.atan2(bx - ax, bz - az);
+      m.receiveShadow = true;
+      this.cena.add(m);
+      this.ocupado.push({ x0: Math.min(ax, bx) - larg / 2, x1: Math.max(ax, bx) + larg / 2, z0: Math.min(az, bz) - larg / 2, z1: Math.max(az, bz) + larg / 2, relva: false });
+    };
+    tira(x0, cz, cx - 7.5, cz, 1.4);
+    tira(cx + 7.5, cz, x1, cz, 1.4);
+    tira(cx, z0, cx, cz - 5.5, 1.4);
+    tira(cx, cz + 5.5, cx, z1, 1.4);
+    // Lago (elipse) com margem de pedra
+    const lago = new THREE.Mesh(new THREE.CircleGeometry(1, 48).rotateX(-Math.PI / 2),
+      new THREE.MeshStandardMaterial({ color: 0x3f7fa6, roughness: 0.05, metalness: 0.35 }));
+    lago.scale.set(6, 1, 4.2);
+    lago.position.set(cx, -0.1, cz);
+    lago.receiveShadow = true;
+    lago.userData.lago = true;
+    this.cena.add(lago);
+    const margem = new THREE.Mesh(new THREE.RingGeometry(1, 1.12, 48).rotateX(-Math.PI / 2), mat(0xbdb9b0, { roughness: 0.9 }));
+    margem.scale.set(6.6, 1, 4.7);
+    margem.position.set(cx, -0.095, cz);
+    margem.userData.lago = true;
+    this.cena.add(margem);
+    this.ocupado.push({ x0: cx - 7, x1: cx + 7, z0: cz - 5.2, z1: cz + 5.2, relva: false });
+    this.obstaculos.push({ x0: cx - 5.2, x1: cx + 5.2, z0: cz - 3.4, z1: cz + 3.4 });
+    // Bancos à volta do lago, virados para a água
+    const banco = R.modelos.banco;
+    if (banco)
+      for (let k = 0; k < 6; k++) {
+        const a = (k / 6) * Math.PI * 2 + 0.3;
+        const b = banco.clone();
+        b.position.set(cx + Math.sin(a) * 8, -0.1, cz + Math.cos(a) * 6);
+        b.rotation.y = a + Math.PI / 2;
+        this.cena.add(b);
+      }
+    // Árvores à volta (longe dos caminhos e do lago)
+    let n = 0;
+    for (let k = 0; k < 400 && n < 26; k++) {
+      const x = x0 + 1.5 + hash(k * 5 + 1001) * (x1 - x0 - 3);
+      const z = z0 + 1.5 + hash(k * 5 + 1002) * (z1 - z0 - 3);
+      if (Math.abs(x - cx) < 2.2 || Math.abs(z - cz) < 2.2) continue;
+      if (((x - cx) / 9) ** 2 + ((z - cz) / 7) ** 2 < 1) continue;
+      n++;
+      this.plantarArvore(k + 3000, x, z, (6 + hash(k + 1003) * 5) * M);
+    }
+    // Peões: dois no passeio das lojas, dois no parque, dois na rua do bairro
+    const v = (x: number, z: number) => new THREE.Vector3(x, -0.12, z);
+    const zl = RUA_T_Z - MEIA_RUA_PASSEIO + 0.5;
+    const xb = this.ruaBairro + MEIA_RUA_PASSEIO - 0.6;
+    this.criarPeoes([
+      [v(RUA_X + 4, zl), v(this.ruaBairro - 4, zl)].concat([v(this.ruaBairro - 4, zl), v(RUA_X + 4, zl)]).slice(0, 2),
+      [v(this.ruaBairro - 6, zl - 0.4), v(RUA_X + 6, zl - 0.4)],
+      [v(x0 + 1, cz), v(cx - 7.5, cz), v(cx, cz - 5.8), v(cx, z0 + 1), v(cx, cz - 5.8), v(cx + 7.5, cz), v(x1 - 1, cz), v(cx + 7.5, cz), v(cx, cz + 5.8), v(cx - 7.5, cz)],
+      [v(cx, z1 - 1), v(cx, cz + 5.8), v(cx + 7.5, cz), v(cx, cz - 5.8), v(cx - 7.5, cz), v(cx, cz + 5.8)],
+      [v(xb, -40), v(xb, altura + 40)],
+      [v(xb + 0.4, altura + 30), v(xb + 0.4, -30)],
+    ]);
+  }
 
   private obstaculo(o: THREE.Object3D): void {
     const b = new THREE.Box3().setFromObject(o);
@@ -1234,6 +1446,7 @@ export class Ambiente {
     }
     this.uTempoRelva.value = this.tempo;
     this.avancarManobras(dt);
+    this.avancarPeoes(dt);
     for (const e of this.especies) e.update(this.tempo);
   }
 }

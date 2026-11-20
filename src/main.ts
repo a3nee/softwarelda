@@ -186,7 +186,7 @@ const confetes = new Confetes(cena);
 const particulas = new Particulas(cena);
 const posfx = new PosFx(renderer, cena, camara);
 posfx.excluirDaOclusao(particulas.grupo, confetes.malha, () => [imVidro]);
-(window as unknown as Record<string, unknown>).__sl = { renderer, cena, posfx, ambiente };
+(window as unknown as Record<string, unknown>).__sl = { renderer, cena, posfx, ambiente, camara, controlos };
 
 // Chão: lajes de granito no espaço aberto (2 por célula, alinhadas com a grelha); soalho ou parquet nas salas.
 // Uma instância por célula em cada tipo de chão; a célula só aparece no tipo que lhe cabe.
