@@ -1,6 +1,6 @@
 // Definições do jogador (guardadas neste browser, à parte dos jogos guardados).
 
-export type Qualidade = 'baixa' | 'media' | 'alta';
+export type Qualidade = 'baixa' | 'media' | 'alta' | 'ultra';
 
 export interface Definicoes {
   sombras: boolean;
@@ -37,7 +37,7 @@ export function lerDefinicoes(): Definicoes {
     const o = JSON.parse(localStorage.getItem(CHAVE) ?? '{}') as Record<string, unknown>;
     for (const k of Object.keys(d) as (keyof Definicoes)[])
       if (typeof o[k] === typeof d[k]) (d as Record<string, unknown>)[k] = o[k];
-    if (!['baixa', 'media', 'alta'].includes(d.qualidade)) d.qualidade = POR_OMISSAO.qualidade;
+    if (!['baixa', 'media', 'alta', 'ultra'].includes(d.qualidade)) d.qualidade = POR_OMISSAO.qualidade;
     d.volume = Math.max(0, Math.min(1, d.volume));
     if (!(LIMITES_FPS as readonly number[]).includes(d.fpsMax)) d.fpsMax = POR_OMISSAO.fpsMax;
   } catch {
@@ -56,6 +56,6 @@ export function guardarDefinicoes(d: Definicoes): void {
 
 /** Resolução do 3D para cada nível de qualidade. */
 export function pixelRatio(q: Qualidade): number {
-  const max = q === 'alta' ? 2 : q === 'media' ? 1.25 : 0.85;
+  const max = q === 'ultra' ? 2 : q === 'alta' ? 1.5 : q === 'media' ? 1.25 : 0.85;
   return Math.min(devicePixelRatio, max);
 }

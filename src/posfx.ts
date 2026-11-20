@@ -88,10 +88,11 @@ export class PosFx {
     this.semOclusao.push(...objetos);
   }
 
-  definir(nivel: NivelFx): void {
+  /** `oclusao`: as sombras de contacto (GTAO) são o efeito mais pesado; só na qualidade Ultra. */
+  definir(nivel: NivelFx, oclusao = true): void {
     this.nivel = nivel;
     this.bloom.enabled = nivel === 'completo';
-    this.ao.enabled = nivel === 'completo';
+    this.ao.enabled = nivel === 'completo' && oclusao;
   }
 
   /** À noite o brilho sobe um pouco: as janelas e os candeeiros ficam com auréola. */

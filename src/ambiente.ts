@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { Sky } from 'three/addons/objects/Sky.js';
 import { Tree } from '@dgreenheck/ez-tree';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { hash, mat } from './modelos.ts';
 import { M, materialPBR, R, texturaNoMundo } from './recursos.ts';
 import type { Qualidade } from './definicoes.ts';
@@ -122,6 +123,7 @@ export class Ambiente {
 
   constructor(cena: THREE.Scene, renderer: THREE.WebGLRenderer, largura: number, altura: number, entrada: { x: number; z: number }) {
     this.cena = cena;
+    const antes = new Set(cena.children);
     this.centro = new THREE.Vector3((largura - 1) / 2, 0, (altura - 1) / 2);
     this.pmrem = new THREE.PMREMGenerator(renderer);
 
@@ -199,6 +201,7 @@ export class Ambiente {
     this.plantarArvoresSoltas(largura, altura);
     this.criarCidade();
     this.criarEstacionamento();
+    this.fundirEstaticos(antes);
     this.criarRelva();
   }
 
@@ -213,6 +216,41 @@ export class Ambiente {
       this.plantarArvore(i, x, z, (7 + hash(i * 3 + 3) * 6) * M);
     }
     void largura;
+  }
+
+  /**
+   * Junta numa só malha, por material, as peças fixas do cenário (passeios, lancis, partes das casas e
+   * prédios...): passa de centenas de chamadas de desenho para poucas dezenas. As peças que se clicam
+   * (casas), as que mexem e as instanciadas ficam como estão.
+   */
+  private fundirEstaticos(antes: Set<THREE.Object3D>): void {
+    const grupos = new Map<string, THREE.Mesh[]>();
+    for (const o of [...this.cena.children]) {
+      if (antes.has(o)) continue;
+      const m = o as THREE.Mesh;
+      if (!m.isMesh || (m as THREE.InstancedMesh).isInstancedMesh || (m as THREE.SkinnedMesh).isSkinnedMesh) continue;
+      if (m.children.length || Array.isArray(m.material) || Object.keys(m.userData).length || m.renderOrder) continue;
+      const g = m.geometry;
+      const chave = [(m.material as THREE.Material).uuid, m.castShadow, m.receiveShadow, g.index ? 'i' : 'n',
+        Object.keys(g.attributes).sort().join(',')].join('|');
+      if (!grupos.has(chave)) grupos.set(chave, []);
+      grupos.get(chave)!.push(m);
+    }
+    for (const malhas of grupos.values()) {
+      if (malhas.length < 2) continue;
+      const geos = malhas.map((m) => {
+        m.updateMatrixWorld(true);
+        return m.geometry.clone().applyMatrix4(m.matrixWorld);
+      });
+      const junta = mergeGeometries(geos, false);
+      geos.forEach((g) => g.dispose());
+      if (!junta) continue;
+      const nova = new THREE.Mesh(junta, malhas[0].material);
+      nova.castShadow = malhas[0].castShadow;
+      nova.receiveShadow = malhas[0].receiveShadow;
+      for (const m of malhas) this.cena.remove(m);
+      this.cena.add(nova);
+    }
   }
 
   /** Se (x, z) está longe (pelo menos `margem`) de tudo o que está construído. */

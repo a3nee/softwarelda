@@ -2641,7 +2641,8 @@ function aplicarDefinicoes(): void {
   ambiente.sombras = def.sombras;
   ambiente.qualidade(def.qualidade);
   configurarSom(def.sons, def.volume);
-  posfx.definir(def.qualidade === 'alta' ? 'completo' : def.qualidade === 'media' ? 'acabamento' : 'nenhum');
+  posfx.definir(def.qualidade === 'alta' || def.qualidade === 'ultra' ? 'completo' : def.qualidade === 'media' ? 'acabamento' : 'nenhum',
+    def.qualidade === 'ultra');
   posfx.redimensionar(innerWidth, innerHeight, pixelRatio(def.qualidade));
   contadorFps.style.display = def.mostrarFps ? 'block' : 'none';
 }
@@ -2848,7 +2849,7 @@ function ciclo(agora: number): void {
   matVidro.emissiveIntensity = (def.cicloDia ? ambiente.noite : 0) * 0.35;
   // Sombras a 60 Hz na qualidade alta e a 30 nas outras, seja qual for o FPS: só as pessoas e os
   // carros mexem, e devagar.
-  if (agora - ultimaSombra >= (def.qualidade === 'alta' ? 16 : 32)) {
+  if (agora - ultimaSombra >= (def.qualidade === 'ultra' ? 16 : 32)) {
     renderer.shadowMap.needsUpdate = true;
     ultimaSombra = agora;
   }

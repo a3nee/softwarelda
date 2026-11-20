@@ -217,7 +217,7 @@ export class Menus {
       <h2>Definições</h2>
       <div class="grupo-def">
         <div class="rotulo">Gráficos</div>
-        <div class="segmentos">${q('baixa', 'Baixa')}${q('media', 'Média')}${q('alta', 'Alta')}</div>
+        <div class="segmentos">${q('baixa', 'Baixa')}${q('media', 'Média')}${q('alta', 'Alta')}${q('ultra', 'Ultra')}</div>
         <div class="rotulo">Limite de FPS</div>
         <div class="segmentos">${LIMITES_FPS.map(
           (f) => `<button data-fps="${f}" class="${d.fpsMax === f ? 'ativo' : ''}">${f || 'Ilimitado'}</button>`,
